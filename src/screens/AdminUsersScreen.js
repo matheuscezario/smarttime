@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -7,8 +7,11 @@ import {
   SafeAreaView,
   ScrollView,
   TextInput,
+  Alert,
+  Platform,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
+import { supabase } from '../services/supabase';
 
 const mockUsers = [
   { id: '1', name: 'João Silva', role: 'Analista Comercial', matricula: '10452', sector: 'Comercial', online: true, time: '08:02', mode: '🏠' },
@@ -20,14 +23,192 @@ const mockUsers = [
   { id: '7', name: 'Lucas Martins', role: 'Supervisor de Operações', matricula: '10458', sector: 'Operações', online: true, time: '08:00', mode: '🏢' },
 ];
 
-export default function AdminUsersScreen({ navigation }) {
+export default function AdminUsersScreen({ navigation, route }) {
   const { requests } = useApp();
-  const pendingCount = requests.filter((r) => r.status === 'pending').length;
+  const profile = route.params?.profile;
+  const canManageUsers =
+  profile?.role === 'ADMIN' ||
+  profile?.role === 'MANAGER';
+const [users, setUsers] = useState([]);
+const [pendingCount, setPendingCount] = useState(0);
+const [loadingUsers, setLoadingUsers] = useState(true);
+  const handleLogout = async () => {
+  await supabase.auth.signOut();
+
+  navigation.reset({
+    index: 0,
+    routes: [{ name: 'Login' }],
+  });
+};
 
   const [activeTab, setActiveTab] = useState('todos');
-  const [search, setSearch] = useState('');
+const [search, setSearch] = useState('');
 
-  const filteredUsers = mockUsers.filter((user) => {
+useEffect(() => {
+  if (!canManageUsers) {
+    navigation.reset({
+      index: 0,
+      routes: [
+        {
+          name: 'Home',
+          params: { profile },
+        },
+      ],
+    });
+  }
+}, [canManageUsers, navigation, profile]);
+
+useEffect(() => {
+  if (!canManageUsers) {
+    setLoadingUsers(false);
+    return;
+  }
+
+  const loadUsers = async () => {
+    try {
+      setLoadingUsers(true);
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .select(`
+          id,
+          company_id,
+          work_schedule_id,
+          full_name,
+          role,
+          department,
+          employee_code,
+          allow_home_office,
+          allow_external_work,
+          active
+        `)
+        .eq('active', true)
+        .order('full_name');
+
+      if (error) {
+        console.error('Erro ao buscar usuários:', error);
+        return;
+      }
+
+      const {
+  count: pendingRequestsCount,
+  error: pendingRequestsError,
+} = await supabase
+  .from('adjustment_requests')
+  .select('id', {
+    count: 'exact',
+    head: true,
+  })
+  .eq('status', 'PENDING');
+
+if (pendingRequestsError) {
+  console.error(
+    'Erro ao buscar solicitações pendentes:',
+    pendingRequestsError
+  );
+} else {
+  setPendingCount(pendingRequestsCount || 0);
+}
+
+      const dataHoje = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Sao_Paulo',
+}).format(new Date());
+
+const {
+  data: workModeAssignments,
+  error: workModeError,
+} = await supabase
+  .from('work_mode_assignments')
+  .select('user_id, work_mode')
+  .eq('work_date', dataHoje);
+
+if (workModeError) {
+  console.error(
+    'Erro ao buscar modos de trabalho:',
+    workModeError
+  );
+}
+
+const workModeByUser = Object.fromEntries(
+  (workModeAssignments || []).map((assignment) => [
+    assignment.user_id,
+    assignment.work_mode,
+  ])
+);
+
+const {
+  data: todayEntries,
+  error: todayEntriesError,
+} = await supabase
+  .from('time_entries')
+  .select('user_id, entry_type, recorded_at')
+  .gte('recorded_at', `${dataHoje}T00:00:00-03:00`)
+  .lte('recorded_at', `${dataHoje}T23:59:59-03:00`)
+  .order('recorded_at', { ascending: false });
+
+if (todayEntriesError) {
+  console.error(
+    'Erro ao buscar batidas de hoje:',
+    todayEntriesError
+  );
+}
+
+const latestEntryByUser = {};
+
+(todayEntries || []).forEach((entry) => {
+  if (!latestEntryByUser[entry.user_id]) {
+    latestEntryByUser[entry.user_id] = entry;
+  }
+});
+
+      const formattedUsers = (data || [])
+        .filter((user) => user.id !== profile?.id)
+        .map((user) => {
+  const latestEntry = latestEntryByUser[user.id];
+
+  const isOnline =
+    Boolean(latestEntry) &&
+    latestEntry.entry_type !== 'CLOCK_OUT';
+
+  const latestTime = latestEntry
+    ? new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(new Date(latestEntry.recorded_at))
+    : '--:--';
+
+  return {
+    id: user.id,
+    companyId: user.company_id,
+    workScheduleId: user.work_schedule_id,
+    allowHomeOffice: user.allow_home_office,
+    allowExternalWork: user.allow_external_work,
+    name: user.full_name,
+    role: user.role,
+    matricula: user.employee_code || 'Sem matrícula',
+    sector: user.department || 'Sem setor',
+    online: isOnline,
+    time: latestTime,
+    mode:
+      workModeByUser[user.id] === 'HOME_OFFICE'
+        ? '🏠'
+        : workModeByUser[user.id] === 'EXTERNAL'
+        ? '🚗'
+        : '🏢',
+  };
+});
+
+      setUsers(formattedUsers);
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  loadUsers();
+}, [profile?.id]);
+
+  const filteredUsers = users.filter((user) => {
     const matchesSearch =
       user.name.toLowerCase().includes(search.toLowerCase()) ||
       user.sector.toLowerCase().includes(search.toLowerCase());
@@ -42,7 +223,7 @@ export default function AdminUsersScreen({ navigation }) {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerIconButton}
-          onPress={() => navigation.goBack()}
+          onPress={handleLogout}
         >
           <Text style={styles.backButtonText}>‹</Text>
         </TouchableOpacity>
@@ -54,30 +235,41 @@ export default function AdminUsersScreen({ navigation }) {
           >
             <Text style={styles.headerIcon}>📊</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.headerIconButton}
-            onPress={() => navigation.navigate('AdminApprovals')}
-          >
-            <Text style={styles.headerIcon}>📋</Text>
-          </TouchableOpacity>
+          
         </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Banner com Contador Dinâmico */}
-        <TouchableOpacity
-          style={styles.approvalBanner}
-          onPress={() => navigation.navigate('AdminApprovals')}
-        >
-          <View style={styles.approvalBannerLeft}>
-            <Text style={styles.approvalBannerIcon}>⏳</Text>
-            <View>
-              <Text style={styles.approvalBannerTitle}>{pendingCount} solicitações pendentes</Text>
-              <Text style={styles.approvalBannerSubtitle}>Clique para revisar e aprovar</Text>
-            </View>
-          </View>
-          <Text style={styles.chevronIcon}>›</Text>
-        </TouchableOpacity>
+        
+  <TouchableOpacity
+    style={styles.approvalBanner}
+    onPress={() => navigation.navigate('AdminApprovals')}
+  >
+    <View style={styles.approvalBannerLeft}>
+      <Text style={styles.approvalBannerIcon}>⏳</Text>
+
+      <View>
+        <Text style={styles.approvalBannerTitle}>
+  {pendingCount > 0
+    ? `${pendingCount} ${
+        pendingCount === 1
+          ? 'solicitação pendente'
+          : 'solicitações pendentes'
+      }`
+    : 'Solicitações de ajuste'}
+</Text>
+
+<Text style={styles.approvalBannerSubtitle}>
+  {pendingCount > 0
+    ? 'Clique para revisar e aprovar'
+    : 'Consulte o histórico de solicitações'}
+</Text>
+      </View>
+    </View>
+
+    <Text style={styles.chevronIcon}>›</Text>
+  </TouchableOpacity>
 
         {/* Seletor de Setor */}
         <Text style={styles.filterLabel}>Setor</Text>
@@ -105,7 +297,7 @@ export default function AdminUsersScreen({ navigation }) {
             onPress={() => setActiveTab('todos')}
           >
             <Text style={[styles.tabText, activeTab === 'todos' && styles.tabTextActive]}>
-              Todos (24)
+              Todos ({users.length})
             </Text>
           </TouchableOpacity>
 
@@ -114,7 +306,7 @@ export default function AdminUsersScreen({ navigation }) {
             onPress={() => setActiveTab('online')}
           >
             <Text style={[styles.tabText, activeTab === 'online' && styles.tabTextActive]}>
-              Online (18)
+              Online ({users.filter((user) => user.online).length})
             </Text>
           </TouchableOpacity>
 
@@ -123,7 +315,7 @@ export default function AdminUsersScreen({ navigation }) {
             onPress={() => setActiveTab('offline')}
           >
             <Text style={[styles.tabText, activeTab === 'offline' && styles.tabTextActive]}>
-              Offline (6)
+              Offline ({users.filter((user) => !user.online).length})
             </Text>
           </TouchableOpacity>
         </View>
@@ -201,9 +393,12 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   scrollContent: {
-    padding: 16,
-    paddingBottom: 32,
-  },
+  width: '100%',
+  maxWidth: 1000,
+  alignSelf: 'center',
+  padding: 16,
+  paddingBottom: 32,
+},
   approvalBanner: {
     flexDirection: 'row',
     alignItems: 'center',

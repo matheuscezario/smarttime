@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { supabase } from '../services/supabase';
 import {
   StyleSheet,
   Text,
@@ -8,12 +9,77 @@ import {
   SafeAreaView,
   KeyboardAvoidingView,
   Platform,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async () => {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (!normalizedEmail || !password) {
+    Alert.alert('Campos obrigatórios', 'Informe o e-mail e a senha.');
+    return;
+  }
+
+  try {
+    setLoading(true);
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: normalizedEmail,
+      password,
+    });
+
+    if (error) {
+      Alert.alert(
+        'Não foi possível entrar',
+        'Confira o e-mail e a senha informados.'
+      );
+      return;
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('id, full_name, email, role, department, employee_code')
+      .eq('id', data.user.id)
+      .single();
+
+    if (profileError || !profile) {
+      await supabase.auth.signOut();
+
+      Alert.alert(
+        'Perfil não encontrado',
+        'A conta existe, mas o perfil do usuário não foi localizado.'
+      );
+      return;
+    }
+
+    const destination =
+      profile.role === 'EMPLOYEE' ? 'Home' : 'AdminUsers';
+
+    navigation.reset({
+      index: 0,
+      routes: [
+        {
+          name: destination,
+          params: { profile },
+        },
+      ],
+    });
+  } catch (error) {
+    Alert.alert(
+      'Erro de conexão',
+      'Não foi possível conectar ao servidor. Tente novamente.'
+    );
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <SafeAreaView style={styles.container}>
@@ -67,11 +133,16 @@ export default function LoginScreen({ navigation }) {
 
           {/* Botão Entrar usando a rota 'Home' do React Navigation */}
           <TouchableOpacity
-            style={styles.buttonPrimary}
-            onPress={() => navigation.navigate('Home')}
-          >
-            <Text style={styles.buttonText}>Entrar</Text>
-          </TouchableOpacity>
+  style={[styles.buttonPrimary, loading && { opacity: 0.6 }]}
+  onPress={handleLogin}
+  disabled={loading}
+>
+  {loading ? (
+    <ActivityIndicator color="#FFFFFF" />
+  ) : (
+    <Text style={styles.buttonText}>Entrar</Text>
+  )}
+</TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>

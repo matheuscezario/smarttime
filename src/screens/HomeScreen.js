@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { supabase } from '../services/supabase';
 import {
   StyleSheet,
   Text,
@@ -6,13 +7,120 @@ import {
   TouchableOpacity,
   SafeAreaView,
   ScrollView,
+  Alert,
+  Platform,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
+import * as Location from 'expo-location';
 
-export default function HomeScreen({ navigation }) {
+export default function HomeScreen({ navigation, route }) {
   const { todayPunches, recordPunch } = useApp();
+  const profile = route.params?.profile;
+  const permiteHomeOffice = profile?.allow_home_office === true;
+const displayName = profile?.full_name || 'Funcionário';
+const initials = displayName
+  .split(' ')
+  .map((name) => name[0])
+  .join('')
+  .slice(0, 2)
+  .toUpperCase();
   const [currentDate, setCurrentDate] = useState(new Date());
-  const assignedWorkMode = 'base'; // 'base' | 'home' | 'externo'
+  const [isRecording, setIsRecording] = useState(false);
+  const [sedeEmpresa, setSedeEmpresa] = useState(null);
+const [distanciaDaSede, setDistanciaDaSede] = useState(null);
+const [dentroDaArea, setDentroDaArea] = useState(false);
+  const [assignedWorkMode, setAssignedWorkMode] = useState('base');
+// 'base' | 'home' | 'externo'
+
+useEffect(() => {
+  const carregarModoTrabalho = async () => {
+    if (!profile?.id) {
+      return;
+    }
+
+    const dataHoje = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+    }).format(new Date());
+
+    const { data, error } = await supabase
+      .from('work_mode_assignments')
+      .select('work_mode')
+      .eq('user_id', profile.id)
+      .eq('work_date', dataHoje)
+      .maybeSingle();
+
+    if (error) {
+      Alert.alert(
+        'Erro',
+        'Não foi possível carregar o modo de trabalho.'
+      );
+      return;
+    }
+
+    const modos = {
+      BASE: 'base',
+      HOME_OFFICE: 'home',
+      EXTERNAL: 'externo',
+    };
+
+    setAssignedWorkMode(modos[data?.work_mode] || 'base');
+  };
+
+  carregarModoTrabalho();
+}, [profile?.id]);
+
+  const calcularDistanciaEmMetros = (
+  latitudeUsuario,
+  longitudeUsuario,
+  latitudeSede,
+  longitudeSede
+) => {
+  const raioTerra = 6371000;
+
+  const converterParaRadianos = (valor) =>
+    (valor * Math.PI) / 180;
+
+  const diferencaLatitude = converterParaRadianos(
+    latitudeSede - latitudeUsuario
+  );
+
+  const diferencaLongitude = converterParaRadianos(
+    longitudeSede - longitudeUsuario
+  );
+
+  const a =
+    Math.sin(diferencaLatitude / 2) ** 2 +
+    Math.cos(converterParaRadianos(latitudeUsuario)) *
+      Math.cos(converterParaRadianos(latitudeSede)) *
+      Math.sin(diferencaLongitude / 2) ** 2;
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return raioTerra * c;
+};
+
+useEffect(() => {
+  const carregarSedeEmpresa = async () => {
+    const { data, error } = await supabase
+      .from('work_locations')
+      .select(
+        'id, name, latitude, longitude, radius_meters, address'
+      )
+      .eq('active', true)
+      .eq('type', 'COMPANY')
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Erro ao carregar sede:', error);
+      return;
+    }
+
+    setSedeEmpresa(data);
+  };
+
+  carregarSedeEmpresa();
+}, []);
 
   // Relógio em tempo real
   useEffect(() => {
@@ -20,9 +128,66 @@ export default function HomeScreen({ navigation }) {
     return () => clearInterval(timer);
   }, []);
 
-  const formatTime = (date) => {
-    return date.toLocaleTimeString('pt-BR', { hour12: false });
+  // Relógio em tempo real
+useEffect(() => {
+  const timer = setInterval(() => setCurrentDate(new Date()), 1000);
+  return () => clearInterval(timer);
+}, []);
+
+// Buscar as batidas registradas hoje
+useEffect(() => {
+  const loadTodayPunches = async () => {
+    if (!profile?.id) {
+      return;
+    }
+
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const endOfDay = new Date(startOfDay);
+    endOfDay.setDate(endOfDay.getDate() + 1);
+
+    const { data, error } = await supabase
+      .from('time_entries')
+      .select('entry_type, recorded_at')
+      .eq('user_id', profile.id)
+      .gte('recorded_at', startOfDay.toISOString())
+      .lt('recorded_at', endOfDay.toISOString())
+      .order('recorded_at');
+
+    if (error) {
+      console.error('Erro ao buscar batidas:', error);
+      return;
+    }
+
+    const entryIndexes = {
+      CLOCK_IN: 0,
+      LUNCH_OUT: 1,
+      LUNCH_IN: 2,
+      CLOCK_OUT: 3,
+    };
+
+    (data || []).forEach((entry) => {
+      const index = entryIndexes[entry.entry_type];
+
+      if (index !== undefined) {
+        const formattedTime = new Date(entry.recorded_at)
+          .toLocaleTimeString('pt-BR', {
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+
+        recordPunch(index, formattedTime);
+      }
+    });
   };
+
+  loadTodayPunches();
+}, [profile?.id]);
+
+const formatTime = (date) => {
+  return date.toLocaleTimeString('pt-BR', { hour12: false });
+};
 
   const formatDate = (date) => {
     const options = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
@@ -30,19 +195,142 @@ export default function HomeScreen({ navigation }) {
     return str.charAt(0).toUpperCase() + str.slice(1);
   };
 
+  const handleLogout = async () => {
+  await supabase.auth.signOut();
+
+  navigation.reset({
+    index: 0,
+    routes: [{ name: 'Login' }],
+  });
+};
+
   // Identifica a próxima batida pendente na ordem
   const nextPunchIndex = todayPunches.findIndex((p) => p.time === null);
 
-  const handleRegisterPunch = (index) => {
+  const handleRegisterPunch = async (index) => {
+    
+  if (isRecording) {
+    return;
+  }
+
+  try {
+    setIsRecording(true);
+
+    if (!sedeEmpresa) {
+      Alert.alert(
+        'Sede não carregada',
+        'Aguarde alguns segundos e tente novamente.'
+      );
+      return;
+    }
+
+    const { status } =
+      await Location.requestForegroundPermissionsAsync();
+      
+
+    if (status !== 'granted') {
+      Alert.alert(
+        'Localização necessária',
+        'Permita o acesso à localização para registrar o ponto.'
+      );
+      return;
+    }
+
+    const location = await Location.getCurrentPositionAsync({
+  accuracy: Location.Accuracy.High,
+});
+
+    
+
+    const distancia = calcularDistanciaEmMetros(
+      location.coords.latitude,
+      location.coords.longitude,
+      Number(sedeEmpresa.latitude),
+      Number(sedeEmpresa.longitude)
+    );
+
+    const estaDentro =
+      distancia <= Number(sedeEmpresa.radius_meters);
+
+    setDistanciaDaSede(Math.round(distancia));
+    setDentroDaArea(estaDentro);
+
+    if (assignedWorkMode === 'base' && !estaDentro) {
+  const mensagem =
+    `Você está fora da área da sede. ` +
+    `O limite permitido é de ${sedeEmpresa.radius_meters} metros.`;
+
+  if (Platform.OS === 'web') {
+    window.alert(`Fora da área permitida\n\n${mensagem}`);
+  } else {
+    Alert.alert('Fora da área permitida', mensagem);
+  }
+
+  return;
+}
+
     const now = new Date();
-    const formatted = now.toLocaleTimeString('pt-BR', {
+
+    const entryTypes = [
+      'CLOCK_IN',
+      'LUNCH_OUT',
+      'LUNCH_IN',
+      'CLOCK_OUT',
+    ];
+
+    const { error } = await supabase.from('time_entries').insert({
+      user_id: profile.id,
+      entry_type: entryTypes[index],
+      recorded_at: now.toISOString(),
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+      accuracy_meters: location.coords.accuracy,
+      within_geofence: estaDentro,
+      location_type:
+  assignedWorkMode === 'home'
+    ? 'HOME_OFFICE'
+    : assignedWorkMode === 'externo'
+    ? 'EXTERNAL'
+    : 'COMPANY',
+      created_offline: false,
+      sync_status: 'SYNCED',
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const formattedTime = now.toLocaleTimeString('pt-BR', {
       hour: '2-digit',
       minute: '2-digit',
     });
 
-    recordPunch(index, formatted);
-    alert(`Ponto registrado: ${todayPunches[index].type} às ${formatted}!`);
-  };
+    recordPunch(index, formattedTime);
+
+    Alert.alert(
+      'Ponto registrado',
+      `${todayPunches[index].type} às ${formattedTime}.`
+    );
+  } catch (error) {
+    console.error('Erro ao registrar ponto:', error);
+
+    const mensagemErro =
+  'Verifique a conexão e a permissão de localização.';
+
+if (Platform.OS === 'web') {
+  window.alert(
+    `Não foi possível registrar\n\n${mensagemErro}`
+  );
+} else {
+  Alert.alert(
+    'Não foi possível registrar',
+    mensagemErro
+  );
+}
+  } finally {
+    setIsRecording(false);
+  }
+};
 
   return (
     <SafeAreaView style={styles.container}>
@@ -58,7 +346,7 @@ export default function HomeScreen({ navigation }) {
             </TouchableOpacity>
 
             <View style={styles.avatarContainer}>
-              <Text style={styles.avatarText}>MS</Text>
+              <Text style={styles.avatarText}>{initials}</Text>
             </View>
 
             <TouchableOpacity style={styles.notificationButton}>
@@ -67,7 +355,7 @@ export default function HomeScreen({ navigation }) {
           </View>
 
           <View style={styles.greetingContainer}>
-            <Text style={styles.greetingTitle}>Olá, Maria Souza! 👋</Text>
+            <Text style={styles.greetingTitle}>Olá, {displayName}! 👋</Text>
             <Text style={styles.greetingSubtitle}>Tenha um ótimo dia de trabalho!</Text>
           </View>
         </View>
@@ -85,10 +373,21 @@ export default function HomeScreen({ navigation }) {
           </View>
 
           {/* Localização */}
-          <View style={styles.locationContainer}>
-            <Text style={styles.locationIcon}>📍</Text>
-            <Text style={styles.locationText}>Dentro da área da empresa</Text>
-          </View>
+<View style={styles.locationContainer}>
+  <Text style={styles.locationIcon}>📍</Text>
+
+  <Text style={styles.locationText}>
+    {assignedWorkMode === 'home'
+      ? 'Home Office autorizado'
+      : assignedWorkMode === 'externo'
+      ? 'Trabalho externo autorizado'
+      : distanciaDaSede === null
+      ? 'Localização ainda não verificada'
+      : dentroDaArea
+      ? 'Dentro da área da empresa'
+      : 'Fora da área da empresa'}
+  </Text>
+</View>
 
           {/* Modo de Trabalho */}
           <View style={styles.workModeSection}>
@@ -203,7 +502,11 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.footerActions}>
           <TouchableOpacity
             style={styles.footerBtn}
-            onPress={() => navigation.navigate('History')}
+            onPress={() =>
+  navigation.navigate('History', {
+    profile,
+  })
+}
           >
             <Text style={styles.footerBtnIcon}>🕒</Text>
             <Text style={styles.footerBtnText}>Histórico</Text>
@@ -218,9 +521,9 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.footerBtn}
-            onPress={() => navigation.navigate('Login')}
-          >
+  style={styles.footerBtn}
+  onPress={handleLogout}
+>
             <Text style={styles.footerBtnIcon}>🚪</Text>
             <Text style={styles.footerBtnText}>Sair</Text>
           </TouchableOpacity>
@@ -236,8 +539,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1F5F9',
   },
   scrollContent: {
-    paddingBottom: 24,
-  },
+  width: '100%',
+  maxWidth: 1000,
+  alignSelf: 'center',
+  paddingBottom: 24,
+},
   topHeader: {
     backgroundColor: '#1E40AF',
     paddingTop: 16,

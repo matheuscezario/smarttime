@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -7,9 +7,11 @@ import {
   SafeAreaView,
   ScrollView,
   TextInput,
+  Platform,
 } from 'react-native';
 import * as Print from 'expo-print';
 import { useApp } from '../context/AppContext';
+import { supabase } from '../services/supabase';
 
 export default function AdminReportsScreen({ navigation }) {
   const { requests } = useApp();
@@ -18,42 +20,262 @@ export default function AdminReportsScreen({ navigation }) {
   const [startDate, setStartDate] = useState('01/05/2024');
   const [endDate, setEndDate] = useState('31/05/2024');
   const [selectedSector, setSelectedSector] = useState('Todos os setores');
-  const [formatType, setFormatType] = useState('pdf'); // 'pdf' | 'excel'
+  const [sectors, setSectors] = useState([]);
+const [sectorMenuOpen, setSectorMenuOpen] = useState(false);
+  
 
   // Métricas dinâmicas do contexto
-  const pendingCount = requests.filter((r) => r.status === 'pending').length;
-  const approvedCount = requests.filter((r) => r.status === 'approved').length;
-  const rejectedCount = requests.filter((r) => r.status === 'rejected').length;
-  const totalRequests = requests.length;
+  const [metrics, setMetrics] = useState({
+  pending: 0,
+  approved: 0,
+  rejected: 0,
+  total: 0,
+});
 
-  const handleGenerateReport = async () => {
-    if (formatType === 'excel') {
-      alert(`Exportação em Excel solicitada para o período ${startDate} até ${endDate}.`);
+useEffect(() => {
+  const loadMetrics = async () => {
+    const { data, error } = await supabase
+      .from('adjustment_requests')
+      .select('status');
+
+    if (error) {
+      console.error('Erro ao carregar métricas:', error);
       return;
     }
 
+    const rows = data || [];
+
+    setMetrics({
+      pending: rows.filter((item) => item.status === 'PENDING').length,
+      approved: rows.filter((item) => item.status === 'APPROVED').length,
+      rejected: rows.filter((item) => item.status === 'REJECTED').length,
+      total: rows.length,
+    });
+  };
+
+  loadMetrics();
+}, []);
+
+const pendingCount = metrics.pending;
+const approvedCount = metrics.approved;
+const rejectedCount = metrics.rejected;
+const totalRequests = metrics.total;
+
+const convertDateToISO = (dateText, endOfDay = false) => {
+  const parts = dateText.split('/');
+
+  if (parts.length !== 3) {
+    return null;
+  }
+
+  const [day, month, year] = parts;
+
+  const date = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    endOfDay ? 23 : 0,
+    endOfDay ? 59 : 0,
+    endOfDay ? 59 : 0,
+    endOfDay ? 999 : 0
+  );
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString();
+};
+
+useEffect(() => {
+  const loadSectors = async () => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('department')
+      .eq('active', true)
+      .not('department', 'is', null);
+
+    if (error) {
+      console.error(
+        'Erro ao carregar setores:',
+        error
+      );
+      return;
+    }
+
+    const uniqueSectors = [
+      ...new Set(
+        (data || [])
+          .map((item) => item.department?.trim())
+          .filter(Boolean)
+      ),
+    ].sort();
+
+    setSectors(uniqueSectors);
+  };
+
+  loadSectors();
+}, []);
+
+  const handleGenerateReport = async () => {
+    const startDateISO = convertDateToISO(startDate);
+const endDateISO = convertDateToISO(endDate, true);
+
+if (!startDateISO || !endDateISO) {
+  alert('Informe as datas no formato DD/MM/AAAA.');
+  return;
+}
+
+if (startDateISO > endDateISO) {
+  alert('A data inicial não pode ser maior que a data final.');
+  return;
+}
+
+const { data: timeEntries, error: timeEntriesError } = await supabase
+  .from('time_entries')
+  .select('id, user_id, entry_type, recorded_at, notes')
+  .gte('recorded_at', startDateISO)
+  .lte('recorded_at', endDateISO)
+  .order('recorded_at', { ascending: true });
+
+if (timeEntriesError) {
+  console.error('Erro ao consultar batidas:', timeEntriesError);
+  alert('Não foi possível consultar as batidas do período.');
+  return;
+}
+
+const userIds = [
+  ...new Set(
+    (timeEntries || []).map((entry) => entry.user_id)
+  ),
+];
+
+let profiles = [];
+
+if (userIds.length > 0) {
+  const {
+    data: profilesData,
+    error: profilesError,
+  } = await supabase
+    .from('profiles')
+    .select(
+      'id, full_name, department, employee_code'
+    )
+    .in('id', userIds);
+
+  if (profilesError) {
+    console.error(
+      'Erro ao consultar funcionários:',
+      profilesError
+    );
+
+    alert(
+      'As batidas foram encontradas, mas não foi possível carregar os funcionários.'
+    );
+
+    return;
+  }
+
+  profiles = profilesData || [];
+}
+
+const profileById = {};
+
+profiles.forEach((employee) => {
+  profileById[employee.id] = employee;
+});
+
+const filteredTimeEntries =
+  selectedSector === 'Todos os setores'
+    ? timeEntries || []
+    : (timeEntries || []).filter((entry) => {
+        const employee =
+          profileById[entry.user_id];
+
+        return (
+          employee?.department ===
+          selectedSector
+        );
+      });
+
+const employeesFound = [
+  ...new Set(
+    (timeEntries || []).map((entry) => {
+      return (
+        profileById[entry.user_id]?.full_name ||
+        'Funcionário não identificado'
+      );
+    })
+  ),
+];
+
+const entryTypeLabels = {
+  CLOCK_IN: 'Entrada',
+  LUNCH_OUT: 'Saída para almoço',
+  LUNCH_IN: 'Volta do almoço',
+  CLOCK_OUT: 'Saída',
+};
+
+const timeEntriesRows =
+  filteredTimeEntries.length > 0
+    ? filteredTimeEntries
+        .map((entry) => {
+    const employee =
+      profileById[entry.user_id];
+
+    const recordedDate = new Date(
+      entry.recorded_at
+    );
+
+    return `
+      <tr>
+        <td>
+          ${
+            employee?.full_name ||
+            'Funcionário não identificado'
+          }
+        </td>
+
+        <td>
+          ${employee?.department || '-'}
+        </td>
+
+        <td>
+          ${recordedDate.toLocaleDateString(
+            'pt-BR'
+          )}
+        </td>
+
+        <td>
+          ${recordedDate.toLocaleTimeString(
+            'pt-BR',
+            {
+              hour: '2-digit',
+              minute: '2-digit',
+            }
+          )}
+        </td>
+
+        <td>
+          ${
+            entryTypeLabels[
+              entry.entry_type
+            ] || entry.entry_type
+          }
+        </td>
+      </tr>
+    `;
+          })
+        .join('')
+    : `
+      <tr>
+        <td colspan="5" style="text-align: center;">
+          Nenhuma batida encontrada para o período e setor selecionados.
+        </td>
+      </tr>
+    `;
+
     try {
-      const requestsRows = requests
-        .map(
-          (req) => `
-        <tr>
-          <td>${req.name}</td>
-          <td>${req.sector}</td>
-          <td>${req.date}</td>
-          <td>${req.type}</td>
-          <td style="font-weight: bold; color: ${
-            req.status === 'approved'
-              ? '#16A34A'
-              : req.status === 'rejected'
-              ? '#DC2626'
-              : '#D97706'
-          };">
-            ${req.status === 'approved' ? 'Aprovado' : req.status === 'rejected' ? 'Recusado' : 'Pendente'}
-          </td>
-        </tr>
-      `
-        )
-        .join('');
 
       const htmlContent = `
         <!DOCTYPE html>
@@ -97,27 +319,65 @@ export default function AdminReportsScreen({ navigation }) {
             </div>
           </div>
 
-          <h3>Detalhamento das Solicitações</h3>
+          <h3>Batidas registradas no período</h3>
           <table>
             <thead>
               <tr>
-                <th>Colaborador</th>
-                <th>Setor</th>
-                <th>Data</th>
-                <th>Tipo</th>
-                <th>Status</th>
-              </tr>
+  <th>Colaborador</th>
+  <th>Setor</th>
+  <th>Data</th>
+  <th>Horário</th>
+  <th>Tipo de batida</th>
+</tr>
             </thead>
             <tbody>
-              ${requestsRows}
+              ${timeEntriesRows}
             </tbody>
           </table>
         </body>
         </html>
       `;
 
-      const { uri } = await Print.printToFileAsync({ html: htmlContent });
-      alert(`Relatório em PDF gerado com sucesso!\nSalvo em: ${uri}`);
+      if (Platform.OS === 'web') {
+  const printFrame =
+    document.createElement('iframe');
+
+  printFrame.style.position = 'fixed';
+  printFrame.style.right = '0';
+  printFrame.style.bottom = '0';
+  printFrame.style.width = '0';
+  printFrame.style.height = '0';
+  printFrame.style.border = '0';
+
+  document.body.appendChild(printFrame);
+
+  const frameDocument =
+    printFrame.contentWindow.document;
+
+  frameDocument.open();
+  frameDocument.write(htmlContent);
+  frameDocument.close();
+
+  setTimeout(() => {
+    printFrame.contentWindow.focus();
+    printFrame.contentWindow.print();
+
+    setTimeout(() => {
+      document.body.removeChild(printFrame);
+    }, 1000);
+  }, 500);
+
+  return;
+}
+
+const { uri } =
+  await Print.printToFileAsync({
+    html: htmlContent,
+  });
+
+alert(
+  `Relatório em PDF gerado com sucesso!\nSalvo em: ${uri}`
+);
     } catch (error) {
       alert('Erro ao gerar relatório.');
       console.error(error);
@@ -177,40 +437,43 @@ export default function AdminReportsScreen({ navigation }) {
 
           {/* Seção Setor */}
           <Text style={styles.fieldLabel}>Setor</Text>
-          <TouchableOpacity style={styles.dropdownSelector}>
-            <Text style={styles.dropdownText}>{selectedSector}</Text>
-            <Text style={styles.dropdownChevron}>⌄</Text>
-          </TouchableOpacity>
+          <TouchableOpacity
+  style={styles.dropdownSelector}
+  onPress={() =>
+    setSectorMenuOpen((current) => !current)
+  }
+>
+  <Text style={styles.dropdownText}>
+    {selectedSector}
+  </Text>
 
-          {/* Seção Formato */}
-          <Text style={styles.fieldLabel}>Formato</Text>
-          <View style={styles.radioRow}>
-            {/* Opção PDF */}
-            <TouchableOpacity
-              style={styles.radioOption}
-              onPress={() => setFormatType('pdf')}
-            >
-              <View style={[styles.radioCircle, formatType === 'pdf' && styles.radioCircleActive]}>
-                {formatType === 'pdf' && <View style={styles.radioDot} />}
-              </View>
-              <Text style={[styles.radioText, formatType === 'pdf' && styles.radioTextActive]}>
-                PDF
-              </Text>
-            </TouchableOpacity>
+  <Text style={styles.dropdownChevron}>
+    {sectorMenuOpen ? '⌃' : '⌄'}
+  </Text>
+</TouchableOpacity>
 
-            {/* Opção Excel */}
-            <TouchableOpacity
-              style={styles.radioOption}
-              onPress={() => setFormatType('excel')}
-            >
-              <View style={[styles.radioCircle, formatType === 'excel' && styles.radioCircleActive]}>
-                {formatType === 'excel' && <View style={styles.radioDot} />}
-              </View>
-              <Text style={[styles.radioText, formatType === 'excel' && styles.radioTextActive]}>
-                Excel
-              </Text>
-            </TouchableOpacity>
-          </View>
+{sectorMenuOpen && (
+  <View style={styles.sectorOptions}>
+    {['Todos os setores', ...sectors].map(
+      (sector) => (
+        <TouchableOpacity
+          key={sector}
+          style={styles.sectorOption}
+          onPress={() => {
+            setSelectedSector(sector);
+            setSectorMenuOpen(false);
+          }}
+        >
+          <Text style={styles.sectorOptionText}>
+            {sector}
+          </Text>
+        </TouchableOpacity>
+      )
+    )}
+  </View>
+)}
+
+        
 
           {/* Botão Gerar Relatório */}
           <TouchableOpacity style={styles.btnGenerate} onPress={handleGenerateReport}>
@@ -454,4 +717,25 @@ const styles = StyleSheet.create({
   textGreen: { color: '#16A34A' },
   textRed: { color: '#DC2626' },
   textBlue: { color: '#0052CC' },
+
+  sectorOptions: {
+  borderWidth: 1,
+  borderColor: '#CBD5E1',
+  borderRadius: 8,
+  backgroundColor: '#FFFFFF',
+  marginTop: 4,
+  overflow: 'hidden',
+},
+
+sectorOption: {
+  paddingVertical: 12,
+  paddingHorizontal: 14,
+  borderBottomWidth: 1,
+  borderBottomColor: '#E2E8F0',
+},
+
+sectorOptionText: {
+  fontSize: 14,
+  color: '#334155',
+},
 });

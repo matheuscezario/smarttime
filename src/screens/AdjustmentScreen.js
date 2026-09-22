@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { supabase } from '../services/supabase';
 import {
   StyleSheet,
   Text,
@@ -7,24 +8,61 @@ import {
   SafeAreaView,
   ScrollView,
   TextInput,
+  Platform,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { useApp } from '../context/AppContext';
 
-export default function AdjustmentScreen({ navigation }) {
+export default function AdjustmentScreen({
+  navigation,
+  route,
+}) {
   const { addAdjustmentRequest } = useApp();
 
   const [requestType, setRequestType] = useState('add'); // 'add' | 'abono'
+  const fallbackRequestedDate =
+  new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+  }).format(new Date());
 
-  const [punches, setPunches] = useState([
-    { id: '1', label: 'Entrada', time: '08:05', isOriginal: true },
-    { id: '2', label: 'Saída Almoço', time: '12:10', isOriginal: true },
-    { id: '3', label: 'Volta Almoço (Faltante)', time: '', isOriginal: false },
-    { id: '4', label: 'Saída (Faltante)', time: '', isOriginal: false },
-  ]);
+const requestedDate =
+  route.params?.requestedDate ||
+  fallbackRequestedDate;
+
+const selectedDateLabel =
+  route.params?.dateLabel ||
+  requestedDate.split('-').reverse().join('/');
+
+const receivedPunches =
+  route.params?.punches ||
+  ['--:--', '--:--', '--:--', '--:--'];
+
+  const punchLabels = [
+  'Entrada',
+  'Saída Almoço',
+  'Volta Almoço',
+  'Saída',
+];
+
+const [punches, setPunches] = useState(
+  receivedPunches.map((time, index) => {
+    const isMissing =
+      !time || time === '--:--';
+
+    return {
+      id: String(index + 1),
+      label: isMissing
+        ? `${punchLabels[index]} (Faltante)`
+        : punchLabels[index],
+      time: isMissing ? '' : time,
+      isOriginal: !isMissing,
+    };
+  })
+);
 
   const [reason, setReason] = useState('');
   const [attachment, setAttachment] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleAddPunchField = () => {
     const nextIndex = punches.length + 1;
@@ -58,7 +96,7 @@ export default function AdjustmentScreen({ navigation }) {
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        setAttachment(result.assets[0].name);
+        setAttachment(result.assets[0]);
       }
     } catch (error) {
       alert('Não foi possível carregar o arquivo.');
@@ -70,27 +108,153 @@ export default function AdjustmentScreen({ navigation }) {
     setAttachment(null);
   };
 
-  const handleSubmit = () => {
-    if (!reason.trim()) {
-      alert('Por favor, informe a justificativa do ajuste.');
-      return;
+  const handleSubmit = async () => {
+      if (isSubmitting) {
+    return;
+  }
+  if (!reason.trim()) {
+    alert('Por favor, informe a justificativa do ajuste.');
+    return;
+  }
+
+  const entryTypes = [
+  'CLOCK_IN',
+  'LUNCH_OUT',
+  'LUNCH_IN',
+  'CLOCK_OUT',
+];
+
+const requestedPunches = punches
+  .map((punch, index) => ({
+    entry_type: entryTypes[index] || null,
+    label: punch.label,
+    requested_time: punch.time.trim(),
+    is_original: punch.isOriginal,
+  }))
+  .filter(
+    (punch) =>
+      !punch.is_original &&
+      punch.requested_time !== ''
+  );
+
+if (
+  requestType === 'add' &&
+  requestedPunches.length === 0
+) {
+  alert(
+    'Preencha pelo menos um horário faltante para solicitar a correção.'
+  );
+  return;
+}
+
+setIsSubmitting(true);
+
+let attachmentPath = null;
+let requestSaved = false;
+
+try {
+    const {
+      data: { session },
+      error: authError,
+    } = await supabase.auth.getSession();
+
+    const loggedUser = session?.user;
+
+    if (authError || !loggedUser) {
+  throw new Error('Usuário não autenticado.');
+}
+
+if (attachment) {
+  const safeFileName = attachment.name.replace(
+    /[^a-zA-Z0-9._-]/g,
+    '_'
+  );
+
+  attachmentPath =
+    `${loggedUser.id}/${Date.now()}-${safeFileName}`;
+
+  let fileData;
+
+  if (Platform.OS === 'web' && attachment.file) {
+    fileData = attachment.file;
+  } else {
+    const fileResponse = await fetch(attachment.uri);
+    fileData = await fileResponse.arrayBuffer();
+  }
+
+  const { error: uploadError } = await supabase.storage
+    .from('adjustment-attachments')
+    .upload(attachmentPath, fileData, {
+      contentType:
+        attachment.mimeType ||
+        attachment.file?.type,
+      upsert: false,
+    });
+
+  if (uploadError) {
+    throw uploadError;
+  }
+}
+
+const { error } = await supabase
+  .from('adjustment_requests')
+      .insert({
+        user_id: loggedUser.id,
+        request_type:
+          requestType === 'add'
+            ? 'TIME_CORRECTION'
+            : 'ABSENCE_EXCUSE',
+        requested_date: requestedDate,
+        requested_punches: requestedPunches,
+        reason: reason.trim(),
+        attachment_url: attachmentPath,
+      });
+
+    if (error) {
+      throw error;
     }
 
-    const newRequest = {
-      name: 'Maria Souza',
-      sector: 'Comercial',
-      date: '15/05/2024',
-      type: requestType === 'add' ? 'Completar/Corrigir marcações' : 'Abono de período',
-      time: '+03:45',
-      reason: reason,
-      attachment: attachment,
-    };
+    requestSaved = true;
 
-    addAdjustmentRequest(newRequest);
+    alert(
+      'Solicitação de ajuste enviada com sucesso para o gestor!'
+    );
 
-    alert('Solicitação de ajuste enviada com sucesso para o gestor!');
     navigation.goBack();
-  };
+  } catch (error) {
+  console.error(
+    'Erro ao enviar solicitação:',
+    error
+  );
+
+  if (attachmentPath && !requestSaved) {
+  const { error: removeError } =
+    await supabase.storage
+      .from('adjustment-attachments')
+      .remove([attachmentPath]);
+
+  if (removeError) {
+    console.error(
+      'Erro ao remover anexo não utilizado:',
+      removeError
+    );
+  }
+}
+
+  if (error?.code === '23505') {
+    alert(
+      'Já existe uma solicitação pendente para esta data.'
+    );
+    return;
+  }
+
+    alert(
+    `Não foi possível enviar a solicitação.\n\n${error.message}`
+  );
+} finally {
+  setIsSubmitting(false);
+}
+};
 
   return (
     <SafeAreaView style={styles.container}>
@@ -110,7 +274,9 @@ export default function AdjustmentScreen({ navigation }) {
         {/* Data */}
         <Text style={styles.fieldLabel}>Data selecionada</Text>
         <View style={styles.dateCard}>
-          <Text style={styles.dateCardText}>15/05/2024 (Quarta-feira)</Text>
+          <Text style={styles.dateText}>
+  {selectedDateLabel}
+</Text>
           <Text style={styles.dateCardBadge}>04h 15m batidas</Text>
         </View>
 
@@ -200,7 +366,7 @@ export default function AdjustmentScreen({ navigation }) {
             <View style={styles.attachmentInfo}>
               <Text style={styles.uploadIcon}>📎</Text>
               <Text style={styles.attachmentSelectedText} numberOfLines={1}>
-                {attachment}
+                {attachment.name}
               </Text>
             </View>
             <TouchableOpacity onPress={handleRemoveAttachment}>
@@ -215,9 +381,20 @@ export default function AdjustmentScreen({ navigation }) {
         )}
 
         {/* Botão de Envio */}
-        <TouchableOpacity style={styles.submitButton} onPress={handleSubmit}>
-          <Text style={styles.submitButtonText}>Enviar solicitação de ajuste</Text>
-        </TouchableOpacity>
+        <TouchableOpacity
+  style={[
+    styles.submitButton,
+    isSubmitting && { opacity: 0.6 },
+  ]}
+  onPress={handleSubmit}
+  disabled={isSubmitting}
+>
+  <Text style={styles.submitButtonText}>
+    {isSubmitting
+      ? 'Enviando...'
+      : 'Enviar solicitação de ajuste'}
+  </Text>
+</TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );

@@ -1,4 +1,8 @@
-import React, { useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
 import {
   StyleSheet,
   Text,
@@ -7,44 +11,479 @@ import {
   SafeAreaView,
   ScrollView,
   Modal,
+  Platform,
 } from 'react-native';
+import {
+  useFocusEffect,
+} from '@react-navigation/native';
 import * as Print from 'expo-print';
 import { useApp } from '../context/AppContext';
+import { supabase } from '../services/supabase';
 
-export default function HistoryScreen({ navigation }) {
-  const { todayPunches, historyData } = useApp();
-  const [selectedMonth, setSelectedMonth] = useState('Maio / 2024');
+export default function HistoryScreen({
+  navigation,
+  route,
+}) {
+  const { todayPunches } = useApp();
+
+  const profile = route.params?.profile;
+
+  const displayName =
+    profile?.full_name || 'Funcionário';
+  const [databaseEntries, setDatabaseEntries] =
+  useState([]);
+
+  const [
+  adjustmentRequests,
+  setAdjustmentRequests,
+] = useState([]);
+
+  const departmentName =
+  profile?.department || 'Não informado';
+
+  const employeeCode =
+  profile?.employee_code || 'Não informado';
+
+  const [companyData, setCompanyData] =
+  useState(null);
+
+  const companyName =
+  companyData?.name || 'Empresa não informada';
+
+  const companyDocument =
+  companyData?.document || 'Não informado';
+
+  const emissionDate =
+  new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(new Date());
+
+const [isLoadingHistory, setIsLoadingHistory] =
+  useState(true);
+  const [selectedMonth, setSelectedMonth] =
+  useState(() => {
+    const monthText =
+      new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        month: 'long',
+        year: 'numeric',
+      }).format(new Date());
+
+    return (
+      monthText.charAt(0).toUpperCase() +
+      monthText.slice(1).replace(' de ', ' / ')
+    );
+  });
   const [previewVisible, setPreviewVisible] = useState(false);
+
+  useFocusEffect(
+  useCallback(() => {
+    const loadHistoryEntries = async () => {
+    try {
+      setIsLoadingHistory(true);
+
+      const {
+        data: { session },
+        error: authError,
+      } = await supabase.auth.getSession();
+
+      const loggedUser = session?.user;
+
+      if (authError || !loggedUser) {
+        throw new Error(
+          'Usuário não autenticado.'
+        );
+      }
+
+      const { data, error } = await supabase
+        .from('time_entries')
+.select(`
+  id,
+  entry_type,
+  recorded_at,
+  notes
+`)
+        .eq('user_id', loggedUser.id)
+        .order('recorded_at', {
+          ascending: false,
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      setDatabaseEntries(data || []);
+      const {
+  data: requestsData,
+  error: requestsError,
+} = await supabase
+  .from('adjustment_requests')
+  .select(`
+  id,
+  requested_date,
+  request_type,
+  status
+`)
+  .eq('user_id', loggedUser.id)
+  .order('created_at', {
+    ascending: false,
+  });
+
+if (requestsError) {
+  throw requestsError;
+}
+
+setAdjustmentRequests(
+  requestsData || []
+);
+    } catch (error) {
+      console.error(
+        'Erro ao carregar histórico:',
+        error
+      );
+
+      setDatabaseEntries([]);
+      setAdjustmentRequests([]);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+      loadHistoryEntries();
+  }, [])
+);
+
+useEffect(() => {
+  const loadCompanyData = async () => {
+    if (!profile?.id) {
+      setCompanyData(null);
+      return;
+    }
+
+    const {
+      data: profileCompany,
+      error: profileError,
+    } = await supabase
+      .from('profiles')
+      .select('company_id')
+      .eq('id', profile.id)
+      .single();
+
+    if (profileError) {
+      console.error(
+        'Erro ao carregar vínculo da empresa:',
+        profileError
+      );
+
+      setCompanyData(null);
+      return;
+    }
+
+    if (!profileCompany?.company_id) {
+      setCompanyData(null);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('companies')
+      .select('name, document')
+      .eq('id', profileCompany.company_id)
+      .single();
+
+    if (error) {
+      console.error(
+        'Erro ao carregar empresa:',
+        error
+      );
+
+      setCompanyData(null);
+      return;
+    }
+
+    setCompanyData(data);
+  };
+
+  loadCompanyData();
+}, [profile?.id]);
 
   const todayEntries = todayPunches.map((p) => p.time || '--:--');
   const recordedCount = todayPunches.filter((p) => p.time !== null).length;
+  const todayTotalHours = (() => {
+  const toMinutes = (time) => {
+    const [hours, minutes] =
+      time.split(':').map(Number);
+
+    return hours * 60 + minutes;
+  };
+
+  let totalMinutes = 0;
+
+  if (
+    todayEntries[0] !== '--:--' &&
+    todayEntries[1] !== '--:--'
+  ) {
+    totalMinutes +=
+      toMinutes(todayEntries[1]) -
+      toMinutes(todayEntries[0]);
+  }
+
+  if (
+    todayEntries[2] !== '--:--' &&
+    todayEntries[3] !== '--:--'
+  ) {
+    totalMinutes +=
+      toMinutes(todayEntries[3]) -
+      toMinutes(todayEntries[2]);
+  }
+
+  const hours = Math.floor(
+    totalMinutes / 60
+  );
+
+  const minutes = totalMinutes % 60;
+
+  return (
+    `${String(hours).padStart(2, '0')}h ` +
+    `${String(minutes).padStart(2, '0')}m`
+  );
+})();
+  const todayDate = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Sao_Paulo',
+}).format(new Date());
+
+const hasPendingTodayAdjustment =
+  adjustmentRequests.some(
+    (request) =>
+      request.requested_date === todayDate &&
+      String(request.status).toUpperCase() ===
+        'PENDING'
+  );
+
+  const hasApprovedTodayAbsence =
+  adjustmentRequests.some(
+    (request) =>
+      request.requested_date === todayDate &&
+      request.request_type ===
+        'ABSENCE_EXCUSE' &&
+      String(request.status).toUpperCase() ===
+        'APPROVED'
+  );
+
+const todayDateLabel = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: 'America/Sao_Paulo',
+  weekday: 'long',
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+}).format(new Date());
+
+const getHistoryDate = (dayLabel) => {
+  const dateMatch = dayLabel.match(
+    /(\d{2})\/(\d{2})/
+  );
+
+  const yearMatch = selectedMonth.match(
+    /(\d{4})/
+  );
+
+  if (!dateMatch || !yearMatch) {
+    return todayDate;
+  }
+
+  const [, day, month] = dateMatch;
+  const year = yearMatch[1];
+
+  return `${year}-${month}-${day}`;
+};
+
+const entryPosition = {
+  CLOCK_IN: 0,
+  LUNCH_OUT: 1,
+  LUNCH_IN: 2,
+  CLOCK_OUT: 3,
+};
+
+const realHistoryData = Object.values(
+  databaseEntries
+    .filter((entry) => {
+      const recordedDate =
+        new Date(entry.recorded_at);
+
+      const monthText =
+        new Intl.DateTimeFormat('pt-BR', {
+          timeZone: 'America/Sao_Paulo',
+          month: 'long',
+          year: 'numeric',
+        }).format(recordedDate);
+
+      const entryMonth =
+        monthText.charAt(0).toUpperCase() +
+        monthText
+          .slice(1)
+          .replace(' de ', ' / ');
+
+      return entryMonth === selectedMonth;
+    })
+    .reduce((days, entry) => {
+    const recordedDate =
+      new Date(entry.recorded_at);
+
+    const dateKey =
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Sao_Paulo',
+      }).format(recordedDate);
+
+    if (!days[dateKey]) {
+      const dateLabel =
+        new Intl.DateTimeFormat('pt-BR', {
+          timeZone: 'America/Sao_Paulo',
+          weekday: 'short',
+          day: '2-digit',
+          month: '2-digit',
+        }).format(recordedDate);
+
+      days[dateKey] = {
+        id: dateKey,
+        day: dateLabel,
+        punches: [
+          '--:--',
+          '--:--',
+          '--:--',
+          '--:--',
+        ],
+      };
+    }
+
+    const position =
+      entryPosition[entry.entry_type];
+
+    if (position !== undefined) {
+      days[dateKey].punches[position] =
+        new Intl.DateTimeFormat('pt-BR', {
+          timeZone: 'America/Sao_Paulo',
+          hour: '2-digit',
+          minute: '2-digit',
+        }).format(recordedDate);
+    }
+
+    return days;
+  }, {})
+)
+  .filter((day) => day.id !== todayDate)
+  .map((day) => {
+    const toMinutes = (time) => {
+      const [hours, minutes] = time
+        .split(':')
+        .map(Number);
+
+      return hours * 60 + minutes;
+    };
+
+    let totalMinutes = 0;
+
+    if (
+      day.punches[0] !== '--:--' &&
+      day.punches[1] !== '--:--'
+    ) {
+      totalMinutes +=
+        toMinutes(day.punches[1]) -
+        toMinutes(day.punches[0]);
+    }
+
+    if (
+      day.punches[2] !== '--:--' &&
+      day.punches[3] !== '--:--'
+    ) {
+      totalMinutes +=
+        toMinutes(day.punches[3]) -
+        toMinutes(day.punches[2]);
+    }
+
+    const isIncomplete = day.punches.some(
+      (time) => time === '--:--'
+    );
+
+    const hours = Math.floor(
+      totalMinutes / 60
+    );
+
+    const minutes = totalMinutes % 60;
+
+    const hasPendingAdjustment =
+  adjustmentRequests.some(
+    (request) =>
+      request.requested_date === day.id &&
+      String(request.status).toUpperCase() ===
+        'PENDING'
+  );
+
+  const hasApprovedAbsence =
+  adjustmentRequests.some(
+    (request) =>
+      request.requested_date === day.id &&
+      request.request_type ===
+        'ABSENCE_EXCUSE' &&
+      String(request.status).toUpperCase() ===
+        'APPROVED'
+  );
+
+    return {
+  ...day,
+  hasPendingAdjustment,
+  hasApprovedAbsence,
+  isIncomplete:
+    hasApprovedAbsence
+      ? false
+      : isIncomplete,
+  status: hasApprovedAbsence
+    ? 'Abonado'
+    : isIncomplete
+      ? 'Incompleto'
+      : 'Completo',
+      totalHours: hasApprovedAbsence
+  ? 'Abonado'
+  : `${String(hours).padStart(2, '0')}h ` +
+    `${String(minutes).padStart(2, '0')}m`,
+    };
+  })
+  .sort((a, b) =>
+    b.id.localeCompare(a.id)
+  );
 
   const handleConfirmDownload = async () => {
     try {
-      const rowsHtml = [
-        `
-        <tr style="background-color: #EFF6FF; font-weight: bold;">
-          <td>Hoje</td>
-          <td>${todayEntries[0]}</td>
-          <td>${todayEntries[1]}</td>
-          <td>${todayEntries[2]}</td>
-          <td>${todayEntries[3]}</td>
-          <td>${recordedCount * 2}h</td>
-        </tr>
-        `,
-        ...historyData.map(
-          (item) => `
-          <tr>
-            <td>${item.day}</td>
-            <td>${item.punches[0]}</td>
-            <td>${item.punches[1]}</td>
-            <td>${item.punches[2]}</td>
-            <td>${item.punches[3]}</td>
-            <td>${item.totalHours}</td>
-          </tr>
-        `
-        ),
-      ].join('');
+      const todayRowHtml =
+  isViewingCurrentMonth
+    ? `
+      <tr style="background-color: #EFF6FF; font-weight: bold;">
+        <td>Hoje</td>
+        <td>${todayEntries[0]}</td>
+        <td>${todayEntries[1]}</td>
+        <td>${todayEntries[2]}</td>
+        <td>${todayEntries[3]}</td>
+        <td>${todayTotalHours}</td>
+      </tr>
+    `
+    : '';
+
+const rowsHtml = [
+  todayRowHtml,
+  ...realHistoryData.map(
+    (item) => `
+      <tr>
+        <td>${item.day}</td>
+        <td>${item.punches[0]}</td>
+        <td>${item.punches[1]}</td>
+        <td>${item.punches[2]}</td>
+        <td>${item.punches[3]}</td>
+        <td>${item.totalHours}</td>
+      </tr>
+    `
+  ),
+].join('');
 
       const htmlContent = `
         <!DOCTYPE html>
@@ -64,11 +503,11 @@ export default function HistoryScreen({ navigation }) {
           </style>
         </head>
         <body>
-          <h2>SMARTTIME SOLUÇÕES CORPORATIVAS</h2>
-          <p>CNPJ: 00.123.456/0001-99 • Folha de Espelho de Ponto</p>
+          <h2>${companyName}</h2>
+<p>CNPJ: ${companyDocument} • Folha de Espelho de Ponto</p>
           <div class="divider"></div>
-          <p><strong>Colaborador:</strong> Maria Souza</p>
-          <p><strong>Cargo:</strong> Assistente Comercial • <strong>Matrícula:</strong> 10453</p>
+          <p><strong>Colaborador:</strong> ${displayName}</p>
+          <p><strong>Departamento:</strong> ${departmentName} • <strong>Matrícula:</strong> ${employeeCode}</p>
           <p><strong>Período:</strong> ${selectedMonth}</p>
 
           <table>
@@ -95,14 +534,160 @@ export default function HistoryScreen({ navigation }) {
         </html>
       `;
 
-      const { uri } = await Print.printToFileAsync({ html: htmlContent });
-      alert(`PDF gerado com sucesso!\nArquivo salvo em: ${uri}`);
-      setPreviewVisible(false);
+      if (Platform.OS === 'web') {
+  await Print.printToFileAsync({
+    html: htmlContent,
+  });
+
+  setPreviewVisible(false);
+  return;
+}
+
+const { uri } =
+  await Print.printToFileAsync({
+    html: htmlContent,
+  });
+
+alert(
+  `PDF gerado com sucesso!\nArquivo salvo em: ${uri}`
+);
+
+setPreviewVisible(false);
     } catch (error) {
       alert('Erro ao gerar o PDF. Verifique o console para mais detalhes.');
       console.error(error);
     }
   };
+
+  const goToPreviousMonth = () => {
+  const months = [
+    'Janeiro',
+    'Fevereiro',
+    'Março',
+    'Abril',
+    'Maio',
+    'Junho',
+    'Julho',
+    'Agosto',
+    'Setembro',
+    'Outubro',
+    'Novembro',
+    'Dezembro',
+  ];
+
+  const [monthName, yearText] =
+    selectedMonth.split(' / ');
+
+  const currentMonthIndex =
+    months.indexOf(monthName);
+
+  if (currentMonthIndex === -1) {
+    return;
+  }
+
+  const previousMonthIndex =
+    currentMonthIndex === 0
+      ? 11
+      : currentMonthIndex - 1;
+
+  const previousYear =
+    currentMonthIndex === 0
+      ? Number(yearText) - 1
+      : Number(yearText);
+
+  setSelectedMonth(
+    `${months[previousMonthIndex]} / ${previousYear}`
+  );
+};
+
+const goToNextMonth = () => {
+  const months = [
+    'Janeiro',
+    'Fevereiro',
+    'Março',
+    'Abril',
+    'Maio',
+    'Junho',
+    'Julho',
+    'Agosto',
+    'Setembro',
+    'Outubro',
+    'Novembro',
+    'Dezembro',
+  ];
+
+  const [monthName, yearText] =
+    selectedMonth.split(' / ');
+
+  const selectedMonthIndex =
+    months.indexOf(monthName);
+
+  if (selectedMonthIndex === -1) {
+    return;
+  }
+
+  const currentDateParts =
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Sao_Paulo',
+      month: 'numeric',
+      year: 'numeric',
+    }).formatToParts(new Date());
+
+  const currentMonthIndex =
+    Number(
+      currentDateParts.find(
+        (part) => part.type === 'month'
+      )?.value
+    ) - 1;
+
+  const currentYear =
+    Number(
+      currentDateParts.find(
+        (part) => part.type === 'year'
+      )?.value
+    );
+
+  const selectedYear = Number(yearText);
+
+  const isCurrentMonth =
+    selectedMonthIndex === currentMonthIndex &&
+    selectedYear === currentYear;
+
+  if (isCurrentMonth) {
+    return;
+  }
+
+  const nextMonthIndex =
+    selectedMonthIndex === 11
+      ? 0
+      : selectedMonthIndex + 1;
+
+  const nextYear =
+    selectedMonthIndex === 11
+      ? selectedYear + 1
+      : selectedYear;
+
+  setSelectedMonth(
+    `${months[nextMonthIndex]} / ${nextYear}`
+  );
+};
+
+const currentMonthText = (() => {
+  const monthText =
+    new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      month: 'long',
+      year: 'numeric',
+    }).format(new Date());
+
+  return (
+    monthText.charAt(0).toUpperCase() +
+    monthText.slice(1).replace(' de ', ' / ')
+  );
+})();
+
+const isViewingCurrentMonth =
+  selectedMonth === currentMonthText;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -121,17 +706,31 @@ export default function HistoryScreen({ navigation }) {
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.monthSelector}>
-          <TouchableOpacity style={styles.monthArrowButton}>
-            <Text style={styles.monthArrow}>‹</Text>
-          </TouchableOpacity>
+          <TouchableOpacity
+  style={styles.monthArrowButton}
+  onPress={goToPreviousMonth}
+>
+  <Text style={styles.monthArrow}>‹</Text>
+</TouchableOpacity>
           <View style={styles.monthCenter}>
             <Text style={styles.calendarIcon}>📅</Text>
             <Text style={styles.monthText}>{selectedMonth}</Text>
           </View>
-          <TouchableOpacity style={styles.monthArrowButton}>
-            <Text style={styles.monthArrow}>›</Text>
-          </TouchableOpacity>
+          <TouchableOpacity
+  style={[
+    styles.monthArrowButton,
+    isViewingCurrentMonth && {
+      opacity: 0.3,
+    },
+  ]}
+  onPress={goToNextMonth}
+  disabled={isViewingCurrentMonth}
+>
+  <Text style={styles.monthArrow}>›</Text>
+</TouchableOpacity>
         </View>
+        {isViewingCurrentMonth && (
+          <>
 
         <Text style={styles.sectionHeader}>Hoje em tempo real</Text>
         <View style={[styles.dayCard, styles.todayCard]}>
@@ -140,11 +739,31 @@ export default function HistoryScreen({ navigation }) {
               <Text style={styles.dayText}>Hoje (Em andamento)</Text>
               <Text style={styles.todaySubText}>{recordedCount} de 4 batidas registradas</Text>
             </View>
-            <View style={[styles.statusBadge, recordedCount === 4 ? styles.badgeSuccess : styles.badgeProgress]}>
-              <Text style={[styles.statusBadgeText, recordedCount === 4 ? styles.textSuccess : styles.textProgress]}>
-                {recordedCount === 4 ? 'Completo' : 'Em curso'}
-              </Text>
-            </View>
+            <View
+  style={[
+    styles.statusBadge,
+    hasApprovedTodayAbsence ||
+    recordedCount === 4
+      ? styles.badgeSuccess
+      : styles.badgeProgress,
+  ]}
+>
+  <Text
+    style={[
+      styles.statusBadgeText,
+      hasApprovedTodayAbsence ||
+      recordedCount === 4
+        ? styles.textSuccess
+        : styles.textProgress,
+    ]}
+  >
+    {hasApprovedTodayAbsence
+      ? 'Abonado'
+      : recordedCount === 4
+        ? 'Completo'
+        : 'Em curso'}
+  </Text>
+</View>
           </View>
 
           <View style={styles.punchesPillRow}>
@@ -169,21 +788,66 @@ export default function HistoryScreen({ navigation }) {
           </View>
 
           <View style={styles.cardBottomRow}>
-            <Text style={styles.totalHoursText}>Total: {recordedCount * 2}h (estimado)</Text>
-            {recordedCount < 4 && (
-              <TouchableOpacity
-                style={styles.btnAdjust}
-                onPress={() => navigation.navigate('Adjustment')}
+            <Text style={styles.totalHoursText}>
+  Total: {todayTotalHours}
+</Text>
+            {recordedCount < 4 &&
+  !hasApprovedTodayAbsence && (
+  <TouchableOpacity
+    style={[
+      styles.btnAdjust,
+      hasPendingTodayAdjustment && {
+        opacity: 0.6,
+      },
+    ]}
+    disabled={hasPendingTodayAdjustment}
+                onPress={() =>
+  navigation.navigate('Adjustment', {
+    requestedDate: todayDate,
+    dateLabel: todayDateLabel,
+    punches: todayEntries,
+  })
+}
               >
-                <Text style={styles.btnAdjustText}>Solicitar ajuste</Text>
+                <Text style={styles.btnAdjustText}>
+  {hasPendingTodayAdjustment
+    ? 'Solicitação pendente'
+    : 'Solicitar ajuste'}
+</Text>
               </TouchableOpacity>
             )}
           </View>
-        </View>
+                </View>
+      </>
+    )}
 
         <Text style={styles.sectionHeader}>Dias anteriores</Text>
         <View style={styles.historyList}>
-          {historyData.map((item) => (
+  {!isLoadingHistory &&
+    realHistoryData.length === 0 && (
+      <View
+        style={{
+          backgroundColor: '#FFFFFF',
+          borderWidth: 1,
+          borderColor: '#E2E8F0',
+          borderRadius: 12,
+          padding: 20,
+          alignItems: 'center',
+        }}
+      >
+        <Text
+          style={{
+            color: '#64748B',
+            fontSize: 13,
+            textAlign: 'center',
+          }}
+        >
+          Nenhum registro encontrado neste mês.
+        </Text>
+      </View>
+    )}
+
+  {realHistoryData.map((item) => (
             <View
               key={item.id}
               style={[styles.dayCard, item.isIncomplete && styles.cardIncomplete]}
@@ -231,13 +895,31 @@ export default function HistoryScreen({ navigation }) {
               <View style={styles.cardBottomRow}>
                 <Text style={styles.totalHoursText}>Total: {item.totalHours}</Text>
                 {item.isIncomplete && (
-                  <TouchableOpacity
-                    style={styles.btnAdjust}
-                    onPress={() => navigation.navigate('Adjustment')}
-                  >
-                    <Text style={styles.btnAdjustText}>Solicitar ajuste</Text>
-                  </TouchableOpacity>
-                )}
+  <TouchableOpacity
+    style={[
+      styles.btnAdjust,
+      item.hasPendingAdjustment && {
+        opacity: 0.6,
+      },
+    ]}
+    disabled={item.hasPendingAdjustment}
+    onPress={() =>
+      navigation.navigate('Adjustment', {
+        requestedDate: getHistoryDate(item.day),
+        dateLabel: `${item.day} / ${
+          selectedMonth.match(/\d{4}/)?.[0] || ''
+        }`,
+        punches: item.punches,
+      })
+    }
+  >
+    <Text style={styles.btnAdjustText}>
+      {item.hasPendingAdjustment
+        ? 'Solicitação pendente'
+        : 'Solicitar ajuste'}
+    </Text>
+  </TouchableOpacity>
+)}
               </View>
             </View>
           ))}
@@ -271,11 +953,19 @@ export default function HistoryScreen({ navigation }) {
 
             <ScrollView contentContainerStyle={styles.sheetPaper} showsVerticalScrollIndicator={false}>
               <View style={styles.sheetHeader}>
-                <Text style={styles.sheetCompany}>SMARTTIME SOLUÇÕES CORPORATIVAS</Text>
-                <Text style={styles.sheetSub}>CNPJ: 00.123.456/0001-99 • Emissão: 17/05/2024</Text>
+                <Text style={styles.sheetCompany}>
+  {companyName}
+</Text>
+                <Text style={styles.sheetSub}>
+  CNPJ: {companyDocument} • Emissão: {emissionDate}
+</Text>
                 <View style={styles.sheetDivider} />
-                <Text style={styles.sheetWorker}>Colaborador: Maria Souza</Text>
-                <Text style={styles.sheetMeta}>Cargo: Assistente Comercial • Matrícula: 10453</Text>
+                <Text style={styles.sheetWorker}>
+  Colaborador: {displayName}
+</Text>
+                <Text style={styles.sheetMeta}>
+  Departamento: {departmentName} • Matrícula: {employeeCode}
+</Text>
                 <Text style={styles.sheetMeta}>Período: {selectedMonth}</Text>
               </View>
 
@@ -289,19 +979,43 @@ export default function HistoryScreen({ navigation }) {
                   <Text style={[styles.tableCol, styles.colTotal, styles.headerText]}>Total</Text>
                 </View>
 
-                <View style={[styles.tableRow, styles.rowToday]}>
-                  <Text style={[styles.tableCol, styles.colDay, styles.boldCol]}>Hoje</Text>
-                  {todayEntries.map((p, i) => (
-                    <Text key={i} style={[styles.tableCol, p === '--:--' && styles.redCol]}>
-                      {p}
-                    </Text>
-                  ))}
-                  <Text style={[styles.tableCol, styles.colTotal, styles.boldCol]}>
-                    {recordedCount * 2}h
-                  </Text>
-                </View>
+                {isViewingCurrentMonth && (
+  <View style={[styles.tableRow, styles.rowToday]}>
+    <Text
+      style={[
+        styles.tableCol,
+        styles.colDay,
+        styles.boldCol,
+      ]}
+    >
+      Hoje
+    </Text>
 
-                {historyData.map((item) => (
+    {todayEntries.map((p, i) => (
+      <Text
+        key={i}
+        style={[
+          styles.tableCol,
+          p === '--:--' && styles.redCol,
+        ]}
+      >
+        {p}
+      </Text>
+    ))}
+
+    <Text
+      style={[
+        styles.tableCol,
+        styles.colTotal,
+        styles.boldCol,
+      ]}
+    >
+      {todayTotalHours}
+    </Text>
+  </View>
+)}
+
+                {realHistoryData.map((item) => (
                   <View key={item.id} style={styles.tableRow}>
                     <Text style={[styles.tableCol, styles.colDay]}>{item.day.split(',')[1]}</Text>
                     {item.punches.map((p, idx) => (
