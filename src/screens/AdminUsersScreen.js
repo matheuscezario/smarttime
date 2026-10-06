@@ -44,6 +44,9 @@ const [loadingUsers, setLoadingUsers] = useState(true);
   const [activeTab, setActiveTab] = useState('todos');
 const [search, setSearch] = useState('');
 
+const [selectedSector, setSelectedSector] = useState('todos');
+const [sectorSelectorOpen, setSectorSelectorOpen] = useState(false);
+
 useEffect(() => {
   if (!canManageUsers) {
     navigation.reset({
@@ -208,14 +211,35 @@ const latestEntryByUser = {};
   loadUsers();
 }, [profile?.id]);
 
-  const filteredUsers = users.filter((user) => {
-    const matchesSearch =
-      user.name.toLowerCase().includes(search.toLowerCase()) ||
-      user.sector.toLowerCase().includes(search.toLowerCase());
-    if (activeTab === 'online') return matchesSearch && user.online;
-    if (activeTab === 'offline') return matchesSearch && !user.online;
-    return matchesSearch;
-  });
+const sectors = [...new Set(users.map((user) => user.sector))]
+  .filter(Boolean)
+  .sort((a, b) => a.localeCompare(b));
+
+  const usersInSelectedSector =
+  selectedSector === 'todos'
+    ? users
+    : users.filter(
+        (user) => user.sector === selectedSector
+      );
+
+  const filteredUsers = usersInSelectedSector.filter((user) => {
+  const matchesSearch =
+    user.name.toLowerCase().includes(search.toLowerCase()) ||
+    user.sector.toLowerCase().includes(search.toLowerCase());
+
+  const matchesSector =
+    selectedSector === 'todos' ||
+    user.sector === selectedSector;
+
+  const matchesStatus =
+    activeTab === 'online'
+      ? user.online
+      : activeTab === 'offline'
+      ? !user.online
+      : true;
+
+  return matchesSearch && matchesSector && matchesStatus;
+});
 
   return (
     <SafeAreaView style={styles.container}>
@@ -272,11 +296,91 @@ const latestEntryByUser = {};
   </TouchableOpacity>
 
         {/* Seletor de Setor */}
-        <Text style={styles.filterLabel}>Setor</Text>
-        <View style={styles.selectorCard}>
-          <Text style={styles.selectorText}>Todos os setores</Text>
-          <Text style={styles.dropdownArrow}>▼</Text>
-        </View>
+<Text style={styles.filterLabel}>Setor</Text>
+
+<TouchableOpacity
+  style={styles.selectorCard}
+  onPress={() =>
+    setSectorSelectorOpen((currentValue) => !currentValue)
+  }
+>
+  <Text style={styles.selectorText}>
+    {selectedSector === 'todos'
+      ? 'Todos os setores'
+      : selectedSector}
+  </Text>
+
+  <Text style={styles.dropdownArrow}>
+    {sectorSelectorOpen ? '▲' : '▼'}
+  </Text>
+</TouchableOpacity>
+
+{sectorSelectorOpen && (
+  <View
+    style={{
+      backgroundColor: '#FFFFFF',
+      borderWidth: 1,
+      borderColor: '#D9E2EF',
+      borderRadius: 12,
+      marginTop: 6,
+      marginBottom: 12,
+      overflow: 'hidden',
+    }}
+  >
+    <TouchableOpacity
+      style={{
+        paddingHorizontal: 16,
+        paddingVertical: 13,
+        backgroundColor:
+          selectedSector === 'todos' ? '#EFF6FF' : '#FFFFFF',
+      }}
+      onPress={() => {
+        setSelectedSector('todos');
+        setSectorSelectorOpen(false);
+      }}
+    >
+      <Text
+        style={{
+          color:
+            selectedSector === 'todos' ? '#1D4ED8' : '#334155',
+          fontWeight:
+            selectedSector === 'todos' ? '700' : '500',
+        }}
+      >
+        Todos os setores
+      </Text>
+    </TouchableOpacity>
+
+    {sectors.map((sector) => (
+      <TouchableOpacity
+        key={sector}
+        style={{
+          paddingHorizontal: 16,
+          paddingVertical: 13,
+          borderTopWidth: 1,
+          borderTopColor: '#E2E8F0',
+          backgroundColor:
+            selectedSector === sector ? '#EFF6FF' : '#FFFFFF',
+        }}
+        onPress={() => {
+          setSelectedSector(sector);
+          setSectorSelectorOpen(false);
+        }}
+      >
+        <Text
+          style={{
+            color:
+              selectedSector === sector ? '#1D4ED8' : '#334155',
+            fontWeight:
+              selectedSector === sector ? '700' : '500',
+          }}
+        >
+          {sector}
+        </Text>
+      </TouchableOpacity>
+    ))}
+  </View>
+)}
 
         {/* Campo de Busca */}
         <View style={styles.searchBox}>
@@ -297,7 +401,7 @@ const latestEntryByUser = {};
             onPress={() => setActiveTab('todos')}
           >
             <Text style={[styles.tabText, activeTab === 'todos' && styles.tabTextActive]}>
-              Todos ({users.length})
+              Todos ({usersInSelectedSector.length})
             </Text>
           </TouchableOpacity>
 
@@ -306,7 +410,7 @@ const latestEntryByUser = {};
             onPress={() => setActiveTab('online')}
           >
             <Text style={[styles.tabText, activeTab === 'online' && styles.tabTextActive]}>
-              Online ({users.filter((user) => user.online).length})
+              Online ({usersInSelectedSector.filter((user) => user.online).length})
             </Text>
           </TouchableOpacity>
 
@@ -315,7 +419,7 @@ const latestEntryByUser = {};
             onPress={() => setActiveTab('offline')}
           >
             <Text style={[styles.tabText, activeTab === 'offline' && styles.tabTextActive]}>
-              Offline ({users.filter((user) => !user.online).length})
+              Offline ({usersInSelectedSector.filter((user) => !user.online).length})
             </Text>
           </TouchableOpacity>
         </View>
