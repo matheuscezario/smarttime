@@ -10,11 +10,9 @@ import {
   Platform,
 } from 'react-native';
 import * as Print from 'expo-print';
-import { useApp } from '../context/AppContext';
 import { supabase } from '../services/supabase';
 
 export default function AdminReportsScreen({ navigation }) {
-  const { requests } = useApp();
 
   // Estados dos filtros da imagem
   const [startDate, setStartDate] = useState('01/05/2024');
@@ -22,44 +20,13 @@ export default function AdminReportsScreen({ navigation }) {
   const [selectedSector, setSelectedSector] = useState('Todos os setores');
   const [sectors, setSectors] = useState([]);
 const [sectorMenuOpen, setSectorMenuOpen] = useState(false);
-  
 
-  // Métricas dinâmicas do contexto
-  const [metrics, setMetrics] = useState({
-  pending: 0,
-  approved: 0,
-  rejected: 0,
-  total: 0,
+const [reportMetrics, setReportMetrics] = useState({
+  employees: 0,
+  punches: 0,
+  registeredDays: 0,
+  outsideGeofence: 0,
 });
-
-useEffect(() => {
-  const loadMetrics = async () => {
-    const { data, error } = await supabase
-      .from('adjustment_requests')
-      .select('status');
-
-    if (error) {
-      console.error('Erro ao carregar métricas:', error);
-      return;
-    }
-
-    const rows = data || [];
-
-    setMetrics({
-      pending: rows.filter((item) => item.status === 'PENDING').length,
-      approved: rows.filter((item) => item.status === 'APPROVED').length,
-      rejected: rows.filter((item) => item.status === 'REJECTED').length,
-      total: rows.length,
-    });
-  };
-
-  loadMetrics();
-}, []);
-
-const pendingCount = metrics.pending;
-const approvedCount = metrics.approved;
-const rejectedCount = metrics.rejected;
-const totalRequests = metrics.total;
 
 const convertDateToISO = (dateText, endOfDay = false) => {
   const parts = dateText.split('/');
@@ -117,6 +84,94 @@ useEffect(() => {
   loadSectors();
 }, []);
 
+useEffect(() => {
+  const loadReportMetrics = async () => {
+    const startDateISO = convertDateToISO(startDate);
+    const endDateISO = convertDateToISO(endDate, true);
+
+    // Enquanto a data estiver incompleta, não consulta o banco.
+    if (!startDateISO || !endDateISO || startDateISO > endDateISO) {
+      setReportMetrics({
+        employees: 0,
+        punches: 0,
+        registeredDays: 0,
+        outsideGeofence: 0,
+      });
+      return;
+    }
+
+    const { data: entries, error: entriesError } = await supabase
+      .from('time_entries')
+      .select('id, user_id, recorded_at, within_geofence')
+      .gte('recorded_at', startDateISO)
+      .lte('recorded_at', endDateISO);
+
+    if (entriesError) {
+      console.error('Erro ao carregar métricas do relatório:', entriesError);
+      return;
+    }
+
+    const userIds = [
+      ...new Set((entries || []).map((entry) => entry.user_id)),
+    ];
+
+    let profiles = [];
+
+    if (userIds.length > 0) {
+      const { data: profilesData, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id, department')
+        .in('id', userIds);
+
+      if (profilesError) {
+        console.error('Erro ao carregar setores das métricas:', profilesError);
+        return;
+      }
+
+      profiles = profilesData || [];
+    }
+
+    const profileById = {};
+
+    profiles.forEach((employee) => {
+      profileById[employee.id] = employee;
+    });
+
+    const filteredEntries =
+      selectedSector === 'Todos os setores'
+        ? entries || []
+        : (entries || []).filter(
+            (entry) =>
+              profileById[entry.user_id]?.department === selectedSector
+          );
+
+    const employees = new Set(
+      filteredEntries.map((entry) => entry.user_id)
+    ).size;
+
+    const registeredDays = new Set(
+      filteredEntries.map((entry) =>
+        new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Sao_Paulo',
+        }).format(new Date(entry.recorded_at))
+      )
+    ).size;
+
+    const outsideGeofence = filteredEntries.filter(
+      (entry) => entry.within_geofence === false
+    ).length;
+
+    setReportMetrics({
+      employees,
+      punches: filteredEntries.length,
+      registeredDays,
+      outsideGeofence,
+    });
+  };
+
+  loadReportMetrics();
+}, [startDate, endDate, selectedSector]);
+
   const handleGenerateReport = async () => {
     const startDateISO = convertDateToISO(startDate);
 const endDateISO = convertDateToISO(endDate, true);
@@ -133,7 +188,9 @@ if (startDateISO > endDateISO) {
 
 const { data: timeEntries, error: timeEntriesError } = await supabase
   .from('time_entries')
-  .select('id, user_id, entry_type, recorded_at, notes')
+  .select(
+  'id, user_id, entry_type, recorded_at, notes, within_geofence'
+)
   .gte('recorded_at', startDateISO)
   .lte('recorded_at', endDateISO)
   .order('recorded_at', { ascending: true });
@@ -197,6 +254,24 @@ const filteredTimeEntries =
           selectedSector
         );
       });
+
+      const reportEmployeeCount = new Set(
+  filteredTimeEntries.map((entry) => entry.user_id)
+).size;
+
+const reportPunchCount = filteredTimeEntries.length;
+
+const reportDayCount = new Set(
+  filteredTimeEntries.map((entry) =>
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+    }).format(new Date(entry.recorded_at))
+  )
+).size;
+
+const reportOutsideGeofenceCount = filteredTimeEntries.filter(
+  (entry) => entry.within_geofence === false
+).length;
 
 const employeesFound = [
   ...new Set(
@@ -301,23 +376,34 @@ const timeEntriesRows =
           <div class="divider"></div>
 
           <div class="metrics-grid">
-            <div class="metric-box">
-              <p>Total Geral</p>
-              <div class="metric-val">${totalRequests}</div>
-            </div>
-            <div class="metric-box">
-              <p>Pendentes</p>
-              <div class="metric-val" style="color: #D97706;">${pendingCount}</div>
-            </div>
-            <div class="metric-box">
-              <p>Aprovados</p>
-              <div class="metric-val" style="color: #16A34A;">${approvedCount}</div>
-            </div>
-            <div class="metric-box">
-              <p>Recusados</p>
-              <div class="metric-val" style="color: #DC2626;">${rejectedCount}</div>
-            </div>
-          </div>
+  <div class="metric-box">
+    <p>Colaboradores</p>
+    <div class="metric-val" style="color: #2563EB;">
+      ${reportEmployeeCount}
+    </div>
+  </div>
+
+  <div class="metric-box">
+    <p>Batidas</p>
+    <div class="metric-val" style="color: #16A34A;">
+      ${reportPunchCount}
+    </div>
+  </div>
+
+  <div class="metric-box">
+    <p>Dias registrados</p>
+    <div class="metric-val" style="color: #D97706;">
+      ${reportDayCount}
+    </div>
+  </div>
+
+  <div class="metric-box">
+    <p>Fora da área</p>
+    <div class="metric-val" style="color: #DC2626;">
+      ${reportOutsideGeofenceCount}
+    </div>
+  </div>
+</div>
 
           <h3>Batidas registradas no período</h3>
           <table>
@@ -448,8 +534,8 @@ alert(
   </Text>
 
   <Text style={styles.dropdownChevron}>
-    {sectorMenuOpen ? '⌃' : '⌄'}
-  </Text>
+  {sectorMenuOpen ? '▲' : '▼'}
+</Text>
 </TouchableOpacity>
 
 {sectorMenuOpen && (
@@ -484,30 +570,42 @@ alert(
         {/* Resumo de Indicadores */}
         <Text style={styles.sectionTitle}>Métricas em tempo real</Text>
         <View style={styles.metricsGrid}>
-          <View style={styles.metricCard}>
-            <Text style={styles.metricLabel}>Pendentes</Text>
-            <Text style={[styles.metricNumber, styles.textAmber]}>{pendingCount}</Text>
-            <Text style={styles.metricSub}>Aguardando revisão</Text>
-          </View>
+  <View style={[styles.metricRow, styles.metricRowSpacing]}>
+    <View style={[styles.metricCard, styles.metricCardLeft]}>
+      <Text style={styles.metricLabel}>Colaboradores</Text>
+      <Text style={[styles.metricNumber, styles.textBlue]}>
+        {reportMetrics.employees}
+      </Text>
+      <Text style={styles.metricSub}>Com registros</Text>
+    </View>
 
-          <View style={styles.metricCard}>
-            <Text style={styles.metricLabel}>Aprovadas</Text>
-            <Text style={[styles.metricNumber, styles.textGreen]}>{approvedCount}</Text>
-            <Text style={styles.metricSub}>Concluídas</Text>
-          </View>
+    <View style={styles.metricCard}>
+      <Text style={styles.metricLabel}>Batidas</Text>
+      <Text style={[styles.metricNumber, styles.textGreen]}>
+        {reportMetrics.punches}
+      </Text>
+      <Text style={styles.metricSub}>No período</Text>
+    </View>
+  </View>
 
-          <View style={styles.metricCard}>
-            <Text style={styles.metricLabel}>Recusadas</Text>
-            <Text style={[styles.metricNumber, styles.textRed]}>{rejectedCount}</Text>
-            <Text style={styles.metricSub}>Não abonadas</Text>
-          </View>
+  <View style={styles.metricRow}>
+    <View style={[styles.metricCard, styles.metricCardLeft]}>
+      <Text style={styles.metricLabel}>Dias registrados</Text>
+      <Text style={[styles.metricNumber, styles.textAmber]}>
+        {reportMetrics.registeredDays}
+      </Text>
+      <Text style={styles.metricSub}>Com movimentação</Text>
+    </View>
 
-          <View style={styles.metricCard}>
-            <Text style={styles.metricLabel}>Total Geral</Text>
-            <Text style={[styles.metricNumber, styles.textBlue]}>{totalRequests}</Text>
-            <Text style={styles.metricSub}>No sistema</Text>
-          </View>
-        </View>
+    <View style={styles.metricCard}>
+      <Text style={styles.metricLabel}>Fora da área</Text>
+      <Text style={[styles.metricNumber, styles.textRed]}>
+        {reportMetrics.outsideGeofence}
+      </Text>
+      <Text style={styles.metricSub}>Batidas sinalizadas</Text>
+    </View>
+  </View>
+</View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -519,211 +617,287 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC',
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-  },
-  backButton: {
-    paddingHorizontal: 8,
-  },
-  backButtonText: {
-    fontSize: 28,
-    color: '#0F172A',
-    fontWeight: '300',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#0A2540',
-  },
-  scrollContent: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-  filterCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2,
-    marginBottom: 20,
-  },
-  cardSectionTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#0A2540',
-    marginBottom: 8,
-  },
-  dateRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 14,
-  },
-  dateCol: {
-    flex: 1,
-  },
-  inputSubLabel: {
-    fontSize: 12,
-    color: '#64748B',
-    marginBottom: 6,
-  },
-  dateInputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  dateInput: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#0F172A',
-    flex: 1,
-    padding: 0,
-  },
-  calendarIcon: {
-    fontSize: 14,
-    marginLeft: 6,
-  },
-  fieldLabel: {
-    fontSize: 13,
-    color: '#64748B',
-    marginBottom: 6,
-  },
-  dropdownSelector: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 16,
-  },
-  dropdownText: {
-    fontSize: 14,
-    color: '#0F172A',
-    fontWeight: '500',
-  },
-  dropdownChevron: {
-    fontSize: 18,
-    color: '#0A2540',
-    fontWeight: 'bold',
-  },
-  radioRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 28,
-    marginBottom: 22,
-    marginTop: 2,
-  },
-  radioOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  radioCircle: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#CBD5E1',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  radioCircleActive: {
-    borderColor: '#0052CC',
-  },
-  radioDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#0052CC',
-  },
-  radioText: {
-    fontSize: 14,
-    color: '#64748B',
-    fontWeight: '500',
-  },
-  radioTextActive: {
-    color: '#0F172A',
-    fontWeight: '700',
-  },
-  btnGenerate: {
-    backgroundColor: '#0052CC',
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  btnGenerateText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#64748B',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 12,
-  },
-  metricsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    justifyContent: 'space-between',
-  },
-  metricCard: {
-    width: '48%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  metricLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  metricNumber: {
-    fontSize: 26,
-    fontWeight: '800',
-    marginVertical: 4,
-  },
-  metricSub: {
-    fontSize: 11,
-    color: '#94A3B8',
-  },
-  textAmber: { color: '#D97706' },
-  textGreen: { color: '#16A34A' },
-  textRed: { color: '#DC2626' },
-  textBlue: { color: '#0052CC' },
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  paddingHorizontal: 20,
+  paddingVertical: 14,
+  backgroundColor: '#FFFFFF',
+  borderBottomWidth: 1,
+  borderBottomColor: '#E2E8F0',
+},
 
-  sectorOptions: {
+backButton: {
+  paddingHorizontal: 8,
+},
+
+backButtonText: {
+  fontSize: 28,
+  color: '#0F172A',
+  fontWeight: '300',
+},
+
+headerTitle: {
+  fontSize: 18,
+  fontWeight: '700',
+  color: '#0A2540',
+},
+
+scrollContent: {
+  width: '100%',
+  maxWidth: 1000,
+  alignSelf: 'center',
+  padding: 16,
+  paddingBottom: 32,
+},
+
+filterCard: {
+  width: '100%',
+  backgroundColor: '#FFFFFF',
+  borderRadius: 16,
+  padding: 20,
+  borderWidth: 1,
+  borderColor: '#E2E8F0',
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.04,
+  shadowRadius: 6,
+  elevation: 2,
+  marginBottom: 20,
+},
+
+cardSectionTitle: {
+  fontSize: 15,
+  fontWeight: '800',
+  color: '#0A2540',
+  marginBottom: 8,
+},
+
+dateRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  marginBottom: 14,
+},
+
+dateCol: {
+  width: '48%',
+  minWidth: 0,
+},
+
+inputSubLabel: {
+  fontSize: 12,
+  color: '#64748B',
+  marginBottom: 6,
+},
+
+dateInputWrapper: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  backgroundColor: '#FFFFFF',
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: '#CBD5E1',
+  paddingHorizontal: 12,
+  height: 46,
+  minWidth: 0,
+  overflow: 'hidden',
+},
+
+dateInput: {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 13,
+  fontWeight: '600',
+  color: '#0F172A',
+  padding: 0,
+},
+
+calendarIcon: {
+  flexShrink: 0,
+  fontSize: 14,
+  marginLeft: 6,
+},
+
+fieldLabel: {
+  fontSize: 13,
+  color: '#64748B',
+  marginBottom: 6,
+},
+
+dropdownSelector: {
+  width: '100%',
+  minHeight: 46,
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  backgroundColor: '#FFFFFF',
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: '#CBD5E1',
+  paddingHorizontal: 14,
+  paddingVertical: 12,
+  marginBottom: 16,
+},
+
+dropdownText: {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 14,
+  color: '#0F172A',
+  fontWeight: '500',
+},
+
+dropdownChevron: {
+  width: 20,
+  flexShrink: 0,
+  fontSize: 11,
+  color: '#0A2540',
+  fontWeight: 'bold',
+  marginLeft: 12,
+  textAlign: 'center',
+},
+
+radioRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 28,
+  marginBottom: 22,
+  marginTop: 2,
+},
+
+radioOption: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8,
+},
+
+radioCircle: {
+  width: 20,
+  height: 20,
+  borderRadius: 10,
+  borderWidth: 2,
+  borderColor: '#CBD5E1',
+  justifyContent: 'center',
+  alignItems: 'center',
+  backgroundColor: '#FFFFFF',
+},
+
+radioCircleActive: {
+  borderColor: '#0052CC',
+},
+
+radioDot: {
+  width: 10,
+  height: 10,
+  borderRadius: 5,
+  backgroundColor: '#0052CC',
+},
+
+radioText: {
+  fontSize: 14,
+  color: '#64748B',
+  fontWeight: '500',
+},
+
+radioTextActive: {
+  color: '#0F172A',
+  fontWeight: '700',
+},
+
+btnGenerate: {
+  width: '100%',
+  backgroundColor: '#0052CC',
+  borderRadius: 10,
+  paddingVertical: 14,
+  alignItems: 'center',
+},
+
+btnGenerateText: {
+  color: '#FFFFFF',
+  fontSize: 15,
+  fontWeight: '700',
+},
+
+sectionTitle: {
+  fontSize: 13,
+  fontWeight: '700',
+  color: '#64748B',
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  marginBottom: 12,
+},
+
+metricsGrid: {
+  width: '100%',
+},
+
+metricRow: {
+  width: '100%',
+  flexDirection: 'row',
+},
+
+metricRowSpacing: {
+  marginBottom: 12,
+},
+
+metricCardLeft: {
+  marginRight: 12,
+},
+
+metricCard: {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 118,
+  boxSizing: 'border-box',
+  justifyContent: 'space-between',
+  backgroundColor: '#FFFFFF',
+  borderRadius: 12,
+  padding: 14,
+  borderWidth: 1,
+  borderColor: '#E2E8F0',
+},
+
+metricLabel: {
+  fontSize: 12,
+  fontWeight: '600',
+  color: '#64748B',
+},
+
+metricNumber: {
+  fontSize: 26,
+  fontWeight: '800',
+  marginVertical: 4,
+},
+
+metricSub: {
+  fontSize: 11,
+  color: '#94A3B8',
+},
+
+textAmber: {
+  color: '#D97706',
+},
+
+textGreen: {
+  color: '#16A34A',
+},
+
+textRed: {
+  color: '#DC2626',
+},
+
+textBlue: {
+  color: '#0052CC',
+},
+
+sectorOptions: {
+  width: '100%',
   borderWidth: 1,
   borderColor: '#CBD5E1',
   borderRadius: 8,
   backgroundColor: '#FFFFFF',
-  marginTop: 4,
+  marginTop: -10,
+  marginBottom: 16,
   overflow: 'hidden',
 },
 
