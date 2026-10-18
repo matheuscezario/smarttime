@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { supabase } from '../services/supabase';
+import React, { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   StyleSheet,
   Text,
@@ -12,69 +12,204 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import { supabase } from '../services/supabase';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    const loadRememberedEmail = async () => {
+      try {
+        const rememberedEmail = await AsyncStorage.getItem(
+          '@smarttime:rememberedEmail'
+        );
+
+        if (rememberedEmail) {
+          setEmail(rememberedEmail);
+          setRememberMe(true);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar e-mail lembrado:', error);
+      }
+    };
+
+    loadRememberedEmail();
+  }, []);
+
+  const showAlert = (title, message) => {
+    if (Platform.OS === 'web') {
+      window.alert(`${title}\n\n${message}`);
+      return;
+    }
+
+    Alert.alert(title, message);
+  };
+
+  const isValidEmail = (value) => {
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailPattern.test(value);
+  };
+
   const handleLogin = async () => {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!normalizedEmail || !password) {
+      showAlert(
+        'Campos obrigatórios',
+        'Informe o e-mail e a senha.'
+      );
+      return;
+    }
+
+    if (!isValidEmail(normalizedEmail)) {
+      showAlert(
+        'E-mail inválido',
+        'Informe um endereço de e-mail válido.'
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      });
+
+      if (error) {
+        showAlert(
+          'Não foi possível entrar',
+          'Confira o e-mail e a senha informados.'
+        );
+        return;
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select(
+          'id, full_name, email, role, department, employee_code, active'
+        )
+        .eq('id', data.user.id)
+        .single();
+
+      if (profileError || !profile) {
+        await supabase.auth.signOut();
+
+        showAlert(
+          'Perfil não encontrado',
+          'A conta existe, mas o perfil do usuário não foi localizado.'
+        );
+        return;
+      }
+
+      if (!profile.active) {
+        await supabase.auth.signOut();
+
+        showAlert(
+          'Usuário desativado',
+          'Seu acesso está desativado. Entre em contato com o administrador.'
+        );
+        return;
+      }
+
+      if (rememberMe) {
+        await AsyncStorage.setItem(
+          '@smarttime:rememberedEmail',
+          normalizedEmail
+        );
+      } else {
+        await AsyncStorage.removeItem('@smarttime:rememberedEmail');
+      }
+
+      const destination =
+  profile.role === 'ADMIN'
+    ? 'AdminUsers'
+    : 'Home';
+
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: destination,
+            params: { profile },
+          },
+        ],
+      });
+    } catch (error) {
+      console.error('Erro ao fazer login:', error);
+
+      showAlert(
+        'Erro de conexão',
+        'Não foi possível conectar ao servidor. Tente novamente.'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
   const normalizedEmail = email.trim().toLowerCase();
 
-  if (!normalizedEmail || !password) {
-    Alert.alert('Campos obrigatórios', 'Informe o e-mail e a senha.');
+  if (!normalizedEmail) {
+    showAlert(
+      'Informe seu e-mail',
+      'Digite seu e-mail antes de solicitar a recuperação da senha.'
+    );
+    return;
+  }
+
+  if (!isValidEmail(normalizedEmail)) {
+    showAlert(
+      'E-mail inválido',
+      'Informe um endereço de e-mail válido.'
+    );
     return;
   }
 
   try {
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: normalizedEmail,
-      password,
-    });
+    const redirectTo =
+      Platform.OS === 'web'
+        ? window.location.origin
+        : undefined;
+
+    const { error } =
+      await supabase.auth.resetPasswordForEmail(
+        normalizedEmail,
+        { redirectTo }
+      );
 
     if (error) {
-      Alert.alert(
-        'Não foi possível entrar',
-        'Confira o e-mail e a senha informados.'
-      );
-      return;
+      throw error;
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('id, full_name, email, role, department, employee_code')
-      .eq('id', data.user.id)
-      .single();
-
-    if (profileError || !profile) {
-      await supabase.auth.signOut();
-
-      Alert.alert(
-        'Perfil não encontrado',
-        'A conta existe, mas o perfil do usuário não foi localizado.'
-      );
-      return;
-    }
-
-    const destination =
-      profile.role === 'EMPLOYEE' ? 'Home' : 'AdminUsers';
-
-    navigation.reset({
-      index: 0,
-      routes: [
-        {
-          name: destination,
-          params: { profile },
-        },
-      ],
-    });
+    showAlert(
+      'E-mail enviado',
+      'Enviamos as instruções de recuperação. Verifique também a caixa de spam.'
+    );
   } catch (error) {
-    Alert.alert(
-      'Erro de conexão',
-      'Não foi possível conectar ao servidor. Tente novamente.'
+    console.error(
+      'Erro ao solicitar recuperação de senha:',
+      error
+    );
+
+    if (error?.status === 429) {
+      showAlert(
+        'Muitas tentativas',
+        'Aguarde alguns minutos antes de solicitar outro e-mail.'
+      );
+      return;
+    }
+
+    showAlert(
+      'Não foi possível enviar',
+      'Tente novamente em alguns instantes.'
     );
   } finally {
     setLoading(false);
@@ -95,54 +230,85 @@ export default function LoginScreen({ navigation }) {
 
         <View style={styles.form}>
           <Text style={styles.label}>E-mail</Text>
+
           <TextInput
             style={styles.input}
             placeholder="seu.email@empresa.com"
             placeholderTextColor="#9CA3AF"
             keyboardType="email-address"
             autoCapitalize="none"
+            autoCorrect={false}
             value={email}
             onChangeText={setEmail}
+            editable={!loading}
           />
 
           <Text style={styles.label}>Senha</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="••••••••"
-            placeholderTextColor="#9CA3AF"
-            secureTextEntry
-            value={password}
-            onChangeText={setPassword}
-          />
+
+          <View style={styles.passwordContainer}>
+            <TextInput
+              style={styles.passwordInput}
+              placeholder="••••••••"
+              placeholderTextColor="#9CA3AF"
+              secureTextEntry={!showPassword}
+              value={password}
+              onChangeText={setPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+              onSubmitEditing={handleLogin}
+              editable={!loading}
+            />
+
+            <TouchableOpacity
+              style={styles.showPasswordButton}
+              onPress={() => setShowPassword((current) => !current)}
+              disabled={loading}
+            >
+              <Text style={styles.showPasswordText}>
+                {showPassword ? 'Ocultar' : 'Mostrar'}
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           <View style={styles.optionsRow}>
             <TouchableOpacity
               style={styles.checkboxContainer}
-              onPress={() => setRememberMe(!rememberMe)}
+              onPress={() => setRememberMe((current) => !current)}
+              disabled={loading}
             >
-              <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+              <View
+                style={[
+                  styles.checkbox,
+                  rememberMe && styles.checkboxChecked,
+                ]}
+              >
                 {rememberMe && <Text style={styles.checkmark}>✓</Text>}
               </View>
+
               <Text style={styles.checkboxLabel}>Lembrar de mim</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity>
-              <Text style={styles.forgotPassword}>Esqueci minha senha</Text>
+            <TouchableOpacity
+              onPress={handleForgotPassword}
+              disabled={loading}
+            >
+              <Text style={styles.forgotPassword}>
+                Esqueci minha senha
+              </Text>
             </TouchableOpacity>
           </View>
 
-          {/* Botão Entrar usando a rota 'Home' do React Navigation */}
           <TouchableOpacity
-  style={[styles.buttonPrimary, loading && { opacity: 0.6 }]}
-  onPress={handleLogin}
-  disabled={loading}
->
-  {loading ? (
-    <ActivityIndicator color="#FFFFFF" />
-  ) : (
-    <Text style={styles.buttonText}>Entrar</Text>
-  )}
-</TouchableOpacity>
+            style={[styles.buttonPrimary, loading && styles.buttonDisabled]}
+            onPress={handleLogin}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.buttonText}>Entrar</Text>
+            )}
+          </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -199,6 +365,32 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#0F172A',
   },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  passwordInput: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#0F172A',
+  },
+  showPasswordButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  showPasswordText: {
+    fontSize: 12,
+    color: '#1D4ED8',
+    fontWeight: '700',
+  },
   optionsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -249,6 +441,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 6,
     elevation: 3,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   buttonText: {
     color: '#FFFFFF',

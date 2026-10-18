@@ -49,39 +49,58 @@ const [punches, setPunches] = useState(
     const isMissing =
       !time || time === '--:--';
 
+    const initialTime = isMissing ? '' : time;
+
     return {
       id: String(index + 1),
       label: isMissing
         ? `${punchLabels[index]} (Faltante)`
         : punchLabels[index],
-      time: isMissing ? '' : time,
+      time: initialTime,
+      originalTime: initialTime,
       isOriginal: !isMissing,
+      isModified: false,
     };
   })
 );
 
-  const [reason, setReason] = useState('');
-  const [attachment, setAttachment] = useState(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+const [reason, setReason] = useState('');
+const [attachment, setAttachment] = useState(null);
+const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleAddPunchField = () => {
-    const nextIndex = punches.length + 1;
-    setPunches((prev) => [
-      ...prev,
-      {
-        id: String(Date.now()),
-        label: `Horário Adicional ${nextIndex}`,
-        time: '',
-        isOriginal: false,
-      },
-    ]);
-  };
+const handleAddPunchField = () => {
+  const nextIndex = punches.length + 1;
 
-  const handleTimeChange = (id, newTime) => {
-    setPunches((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, time: newTime } : item))
-    );
-  };
+  setPunches((previousPunches) => [
+    ...previousPunches,
+    {
+      id: String(Date.now()),
+      label: `Horário Adicional ${nextIndex}`,
+      time: '',
+      originalTime: '',
+      isOriginal: false,
+      isModified: false,
+    },
+  ]);
+};
+
+const handleTimeChange = (id, newTime) => {
+  setPunches((previousPunches) =>
+    previousPunches.map((item) => {
+      if (item.id !== id) {
+        return item;
+      }
+
+      return {
+        ...item,
+        time: newTime,
+        isModified:
+          newTime.trim() !==
+          (item.originalTime || '').trim(),
+      };
+    })
+  );
+};
 
   const handleRemovePunchField = (id) => {
     setPunches((prev) => prev.filter((item) => item.id !== id));
@@ -128,13 +147,19 @@ const requestedPunches = punches
   .map((punch, index) => ({
     entry_type: entryTypes[index] || null,
     label: punch.label,
+    original_time:
+      punch.originalTime?.trim() || null,
     requested_time: punch.time.trim(),
     is_original: punch.isOriginal,
+    is_modified: punch.isModified,
   }))
   .filter(
     (punch) =>
-      !punch.is_original &&
-      punch.requested_time !== ''
+      punch.requested_time !== '' &&
+      (
+        !punch.is_original ||
+        punch.is_modified
+      )
   );
 
 if (
@@ -142,7 +167,7 @@ if (
   requestedPunches.length === 0
 ) {
   alert(
-    'Preencha pelo menos um horário faltante para solicitar a correção.'
+    'Altere pelo menos um horário ou preencha uma marcação faltante.'
   );
   return;
 }
@@ -277,7 +302,15 @@ const { error } = await supabase
           <Text style={styles.dateText}>
   {selectedDateLabel}
 </Text>
-          <Text style={styles.dateCardBadge}>04h 15m batidas</Text>
+          <Text style={styles.dateCardBadge}>
+  {
+    punches.filter(
+      (item) =>
+        item.time &&
+        item.time !== '--:--'
+    ).length
+  } de 4 batidas
+</Text>
         </View>
 
         {/* Tipo de Solicitação */}
@@ -322,16 +355,17 @@ const { error } = await supabase
 
               <View style={styles.punchInputWrapper}>
                 <TextInput
-                  style={[
-                    styles.punchInput,
-                    item.isOriginal && styles.punchInputReadOnly,
-                  ]}
-                  value={item.time}
-                  onChangeText={(val) => handleTimeChange(item.id, val)}
-                  placeholder="--:--"
-                  placeholderTextColor="#94A3B8"
-                  editable={!item.isOriginal}
-                />
+  style={styles.punchInput}
+  value={item.time}
+  onChangeText={(value) =>
+    handleTimeChange(item.id, value)
+  }
+  placeholder="--:--"
+  placeholderTextColor="#94A3B8"
+  keyboardType="numeric"
+  maxLength={5}
+  editable
+/>
                 {!item.isOriginal && punches.length > 4 && (
                   <TouchableOpacity
                     style={styles.btnDeletePunch}

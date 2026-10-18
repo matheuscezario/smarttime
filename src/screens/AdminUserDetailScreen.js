@@ -27,7 +27,72 @@ const [isSavingMode, setIsSavingMode] = useState(false);
 const [userEntries, setUserEntries] = useState([]);
 const [isLoadingEntries, setIsLoadingEntries] = useState(true);
 const [pendingAdjustments, setPendingAdjustments] = useState(0);
+const [
+  approvedAdjustments,
+  setApprovedAdjustments,
+] = useState([]);
 const [workSchedule, setWorkSchedule] = useState(null);
+
+const [
+  selectedHistoryMonth,
+  setSelectedHistoryMonth,
+] = useState(() => new Date());
+
+const selectedHistoryMonthKey =
+  `${selectedHistoryMonth.getFullYear()}-` +
+  `${String(
+    selectedHistoryMonth.getMonth() + 1
+  ).padStart(2, '0')}`;
+
+const selectedHistoryMonthText =
+  new Intl.DateTimeFormat('pt-BR', {
+    month: 'long',
+    year: 'numeric',
+  }).format(selectedHistoryMonth);
+
+const formattedHistoryMonth =
+  selectedHistoryMonthText
+    .charAt(0)
+    .toUpperCase() +
+  selectedHistoryMonthText
+    .slice(1)
+    .replace(' de ', ' / ');
+
+const currentHistoryMonthKey =
+  `${new Date().getFullYear()}-` +
+  `${String(
+    new Date().getMonth() + 1
+  ).padStart(2, '0')}`;
+
+const isCurrentHistoryMonth =
+  selectedHistoryMonthKey ===
+  currentHistoryMonthKey;
+
+const goToPreviousHistoryMonth = () => {
+  setSelectedHistoryMonth(
+    (current) =>
+      new Date(
+        current.getFullYear(),
+        current.getMonth() - 1,
+        1
+      )
+  );
+};
+
+const goToNextHistoryMonth = () => {
+  if (isCurrentHistoryMonth) {
+    return;
+  }
+
+  setSelectedHistoryMonth(
+    (current) =>
+      new Date(
+        current.getFullYear(),
+        current.getMonth() + 1,
+        1
+      )
+  );
+};
 
 useEffect(() => {
   const carregarModoTrabalho = async () => {
@@ -106,6 +171,7 @@ useEffect(() => {
 useEffect(() => {
   const carregarPendencias = async () => {
     if (!user?.id) {
+      setPendingAdjustments(0);
       return;
     }
 
@@ -130,6 +196,41 @@ useEffect(() => {
   };
 
   carregarPendencias();
+}, [user?.id]);
+
+useEffect(() => {
+  const carregarAjustesAprovados = async () => {
+    if (!user?.id) {
+      setApprovedAdjustments([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('adjustment_requests')
+      .select(`
+        id,
+        requested_date,
+        request_type,
+        requested_punches,
+        status
+      `)
+      .eq('user_id', user.id)
+      .eq('status', 'APPROVED');
+
+    if (error) {
+      console.error(
+        'Erro ao carregar ajustes aprovados:',
+        error
+      );
+
+      setApprovedAdjustments([]);
+      return;
+    }
+
+    setApprovedAdjustments(data || []);
+  };
+
+  carregarAjustesAprovados();
 }, [user?.id]);
 
 useEffect(() => {
@@ -181,8 +282,76 @@ const initials = user.name
   CLOCK_OUT: 3,
 };
 
+const effectiveUserEntries = [...userEntries];
+
+approvedAdjustments
+  .filter(
+    (adjustment) =>
+      adjustment.request_type ===
+        'TIME_CORRECTION' &&
+      Array.isArray(
+        adjustment.requested_punches
+      )
+  )
+  .forEach((adjustment) => {
+    adjustment.requested_punches.forEach(
+      (punch) => {
+        if (
+          !punch.entry_type ||
+          !punch.requested_time
+        ) {
+          return;
+        }
+
+        const correctedEntry = {
+          id:
+            `adjustment-${adjustment.id}-` +
+            `${punch.entry_type}`,
+          entry_type: punch.entry_type,
+          recorded_at:
+            `${adjustment.requested_date}T` +
+            `${punch.requested_time.slice(0, 5)}` +
+            ':00-03:00',
+        };
+
+        const existingIndex =
+          effectiveUserEntries.findIndex(
+            (entry) => {
+              const entryDate =
+                new Intl.DateTimeFormat(
+                  'en-CA',
+                  {
+                    timeZone:
+                      'America/Sao_Paulo',
+                  }
+                ).format(
+                  new Date(entry.recorded_at)
+                );
+
+              return (
+                entryDate ===
+                  adjustment.requested_date &&
+                entry.entry_type ===
+                  punch.entry_type
+              );
+            }
+          );
+
+        if (existingIndex >= 0) {
+          effectiveUserEntries[
+            existingIndex
+          ] = correctedEntry;
+        } else {
+          effectiveUserEntries.push(
+            correctedEntry
+          );
+        }
+      }
+    );
+  });
+
 const realUserHistory = Object.values(
-  userEntries.reduce((days, entry) => {
+  effectiveUserEntries.reduce((days, entry) => {
     const recordedDate = new Date(entry.recorded_at);
 
     const dateKey = new Intl.DateTimeFormat('en-CA', {
@@ -256,6 +425,17 @@ realUserHistory.forEach((day) => {
     `${String(minutes).padStart(2, '0')}m`;
 });
 
+const filteredUserHistory =
+  realUserHistory
+    .filter((day) =>
+      day.id.startsWith(
+        selectedHistoryMonthKey
+      )
+    )
+    .sort((a, b) =>
+      b.id.localeCompare(a.id)
+    );
+
 const currentMonthKey = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/Sao_Paulo',
   year: 'numeric',
@@ -304,26 +484,95 @@ const expectedDailyMinutes = workSchedule
     `${String(expectedDailyMinutes % 60).padStart(2, '0')}m por dia`
   : 'Jornada não definida';
 
+const currentDateKeyForBank =
+  new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+  }).format(new Date());
+
+const [
+  currentBankYear,
+  currentBankMonth,
+  currentBankDay,
+] = currentDateKeyForBank
+  .split('-')
+  .map(Number);
+
+const lastClosedDay =
+  Math.max(currentBankDay - 1, 0);
+
+const closedWorkdays = Array.from(
+  { length: lastClosedDay },
+  (_, index) => {
+    const day = index + 1;
+
+    const dateKey =
+      `${currentBankYear}-` +
+      `${String(currentBankMonth).padStart(2, '0')}-` +
+      `${String(day).padStart(2, '0')}`;
+
+    const date = new Date(
+      `${dateKey}T12:00:00-03:00`
+    );
+
+    return {
+      dateKey,
+      weekDay: date.getDay(),
+    };
+  }
+).filter(
+  (day) =>
+    day.weekDay !== 0 &&
+    day.weekDay !== 6
+);
+
 const bankMinutes = workSchedule
-  ? realUserHistory
-      .filter(
-        (day) =>
-          day.id.startsWith(currentMonthKey) &&
-          day.ok
-      )
-      .reduce((balance, day) => {
+  ? closedWorkdays.reduce(
+      (balance, workDay) => {
+        const hasApprovedAbsence =
+          approvedAdjustments.some(
+            (adjustment) =>
+              adjustment.requested_date ===
+                workDay.dateKey &&
+              adjustment.request_type ===
+                'ABSENCE_EXCUSE'
+          );
+
+        if (hasApprovedAbsence) {
+          return balance;
+        }
+
+        const dayHistory =
+          realUserHistory.find(
+            (day) =>
+              day.id === workDay.dateKey
+          );
+
+        const workedMinutes =
+          dayHistory?.totalMinutes || 0;
+
         const difference =
-          day.totalMinutes - expectedDailyMinutes;
+          workedMinutes -
+          expectedDailyMinutes;
+
+        const tolerance = Number(
+          workSchedule.tolerance_minutes || 0
+        );
 
         const adjustedDifference =
-          Math.abs(difference) <=
-          workSchedule.tolerance_minutes
+          Math.abs(difference) <= tolerance
             ? 0
             : difference;
 
-        return balance + adjustedDifference;
-      }, 0)
+        return (
+          balance + adjustedDifference
+        );
+      },
+      0
+    )
   : 0;
+
+const accountedWorkdays =
+  closedWorkdays.length;
 
 const bankSign = bankMinutes > 0 ? '+' : bankMinutes < 0 ? '-' : '';
 
@@ -596,7 +845,9 @@ if (authError || !manager) {
         {/* Indicadores Rápidos */}
         <View style={styles.kpiRow}>
           <View style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>Horas (Mês)</Text>
+            <Text style={styles.kpiLabel}>
+  Horas trabalhadas
+</Text>
             <Text style={styles.kpiValue}>
   {isLoadingEntries ? '--' : monthlyTotalText}
 </Text>
@@ -606,7 +857,9 @@ if (authError || !manager) {
           </View>
 
           <View style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>Banco de Horas</Text>
+            <Text style={styles.kpiLabel}>
+  Saldo mensal
+</Text>
             <Text
   style={[
     styles.kpiValue,
@@ -618,11 +871,10 @@ if (authError || !manager) {
 </Text>
 
 <Text style={styles.kpiSub}>
-  {bankMinutes > 0
-    ? 'Positivo'
-    : bankMinutes < 0
-    ? 'Negativo'
-    : 'Sem saldo'}
+  {accountedWorkdays}{' '}
+  {accountedWorkdays === 1
+    ? 'dia útil encerrado'
+    : 'dias úteis encerrados'}
 </Text>
           </View>
 
@@ -666,6 +918,41 @@ if (authError || !manager) {
 
         {/* Últimas Marcações */}
         <Text style={styles.sectionTitle}>Últimas marcações registradas</Text>
+        <View style={styles.historyMonthSelector}>
+  <TouchableOpacity
+    style={styles.historyMonthArrowButton}
+    onPress={goToPreviousHistoryMonth}
+  >
+    <Text style={styles.historyMonthArrow}>
+      ‹
+    </Text>
+  </TouchableOpacity>
+
+  <View style={styles.historyMonthCenter}>
+    <Text style={styles.historyMonthIcon}>
+      📅
+    </Text>
+
+    <Text style={styles.historyMonthText}>
+      {formattedHistoryMonth}
+    </Text>
+  </View>
+
+  <TouchableOpacity
+    style={[
+      styles.historyMonthArrowButton,
+      isCurrentHistoryMonth && {
+        opacity: 0.3,
+      },
+    ]}
+    onPress={goToNextHistoryMonth}
+    disabled={isCurrentHistoryMonth}
+  >
+    <Text style={styles.historyMonthArrow}>
+      ›
+    </Text>
+  </TouchableOpacity>
+</View>
         {isLoadingEntries && (
   <Text
     style={{
@@ -677,7 +964,7 @@ if (authError || !manager) {
   </Text>
 )}
 
-{!isLoadingEntries && realUserHistory.length === 0 && (
+{!isLoadingEntries && filteredUserHistory.length === 0 && (
   <Text
     style={{
       color: '#64748B',
@@ -689,7 +976,7 @@ if (authError || !manager) {
 )}
         <View style={styles.historyList}>
           {!isLoadingEntries &&
-  realUserHistory.map((item) => (
+  filteredUserHistory.map((item) => (
             <View key={item.id} style={styles.historyItem}>
               <View style={styles.historyHeader}>
                 <Text style={styles.historyDate}>{item.date}</Text>
@@ -975,5 +1262,46 @@ workModeButtonTextActive: {
 
 workModeButtonTextDisabled: {
   color: '#94A3B8',
+},
+historyMonthSelector: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  backgroundColor: '#FFFFFF',
+  borderWidth: 1,
+  borderColor: '#E2E8F0',
+  borderRadius: 12,
+  paddingHorizontal: 10,
+  paddingVertical: 9,
+  marginBottom: 12,
+},
+
+historyMonthArrowButton: {
+  width: 36,
+  height: 36,
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+
+historyMonthArrow: {
+  fontSize: 25,
+  color: '#1D4ED8',
+  fontWeight: '500',
+},
+
+historyMonthCenter: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8,
+},
+
+historyMonthIcon: {
+  fontSize: 16,
+},
+
+historyMonthText: {
+  fontSize: 14,
+  fontWeight: '700',
+  color: '#0F172A',
 },
 });

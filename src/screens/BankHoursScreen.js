@@ -42,6 +42,58 @@ const getSaoPauloDateKey = (dateValue) => {
 
 export default function BankHoursScreen({ navigation }) {
   const [activeTab, setActiveTab] = useState('todos'); // 'todos' | 'credito' | 'debito'
+  const [selectedMonth, setSelectedMonth] = useState(
+  () => new Date()
+);
+
+const selectedMonthKey =
+  `${selectedMonth.getFullYear()}-` +
+  `${String(selectedMonth.getMonth() + 1).padStart(2, '0')}`;
+
+const selectedMonthLabel =
+  new Intl.DateTimeFormat('pt-BR', {
+    month: 'long',
+    year: 'numeric',
+  }).format(selectedMonth);
+
+const formattedSelectedMonth =
+  selectedMonthLabel.charAt(0).toUpperCase() +
+  selectedMonthLabel
+    .slice(1)
+    .replace(' de ', ' / ');
+
+const goToPreviousMonth = () => {
+  setSelectedMonth(
+    (current) =>
+      new Date(
+        current.getFullYear(),
+        current.getMonth() - 1,
+        1
+      )
+  );
+};
+
+const currentMonthKey =
+  `${new Date().getFullYear()}-` +
+  `${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+
+const isCurrentMonth =
+  selectedMonthKey === currentMonthKey;
+
+const goToNextMonth = () => {
+  if (isCurrentMonth) {
+    return;
+  }
+
+  setSelectedMonth(
+    (current) =>
+      new Date(
+        current.getFullYear(),
+        current.getMonth() + 1,
+        1
+      )
+  );
+};
   const [databaseEntries, setDatabaseEntries] = useState([]);
 const [workSchedule, setWorkSchedule] = useState(null);
 const [isLoadingBank, setIsLoadingBank] = useState(true);
@@ -202,6 +254,37 @@ const transactions = Object.entries(entriesGroupedByDate)
     const lunchIn = findEntry('LUNCH_IN');
     const clockOut = findEntry('CLOCK_OUT');
 
+    const formatPunchTime = (entry) => {
+  if (!entry) {
+    return '--:--';
+  }
+
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(entry.recorded_at));
+};
+
+const punches = [
+  {
+    label: 'Entrada',
+    time: formatPunchTime(clockIn),
+  },
+  {
+    label: 'Almoço',
+    time: formatPunchTime(lunchOut),
+  },
+  {
+    label: 'Volta',
+    time: formatPunchTime(lunchIn),
+  },
+  {
+    label: 'Saída',
+    time: formatPunchTime(clockOut),
+  },
+];
+
     let workedMinutes = 0;
 
     if (clockIn && lunchOut) {
@@ -284,31 +367,47 @@ let description = 'Jornada em andamento';
       weekday.charAt(0).toUpperCase() + weekday.slice(1);
 
     return {
-      id: dateKey,
-      date: isToday
-        ? `Hoje (${day}/${month})`
-        : `${formattedWeekday}, ${day}/${month}`,
-      description,
-      hours: formatMinutesToBank(bankMinutes),
-      type:
-        bankMinutes > 0
-          ? 'positive'
-          : bankMinutes < 0
-          ? 'negative'
-          : 'neutral',
-      bankMinutes,
-      dateKey,
-    };
+  id: dateKey,
+  date: isToday
+    ? `Hoje (${day}/${month})`
+    : `${formattedWeekday}, ${day}/${month}`,
+  description,
+  hours: formatMinutesToBank(bankMinutes),
+  type:
+    bankMinutes > 0
+      ? 'positive'
+      : bankMinutes < 0
+        ? 'negative'
+        : 'neutral',
+  bankMinutes,
+  dateKey,
+  punches,
+  needsAdjustment:
+  !isToday &&
+  !hasApprovedAbsence,
+};
   })
   .sort((a, b) => b.dateKey.localeCompare(a.dateKey));
 
-  const filteredTransactions = transactions.filter((t) => {
-    if (activeTab === 'credito') return t.type === 'positive';
-    if (activeTab === 'debito') return t.type === 'negative';
+  const monthlyTransactions = transactions.filter(
+  (transaction) =>
+    transaction.dateKey.startsWith(selectedMonthKey)
+);
+
+const filteredTransactions =
+  monthlyTransactions.filter((transaction) => {
+    if (activeTab === 'credito') {
+      return transaction.type === 'positive';
+    }
+
+    if (activeTab === 'debito') {
+      return transaction.type === 'negative';
+    }
+
     return true;
   });
 
-  const balanceMinutes = transactions.reduce((total, transaction) => {
+  const balanceMinutes = monthlyTransactions.reduce((total, transaction) => {
   const isNegative = transaction.hours.startsWith('-');
   const numericTime = transaction.hours.replace('+', '').replace('-', '');
   const [hours, minutes] = numericTime.split(':').map(Number);
@@ -357,6 +456,35 @@ const balanceColor = isPositiveBalance
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.monthSelector}>
+  <TouchableOpacity
+    style={styles.monthArrowButton}
+    onPress={goToPreviousMonth}
+  >
+    <Text style={styles.monthArrow}>‹</Text>
+  </TouchableOpacity>
+
+  <View style={styles.monthCenter}>
+    <Text style={styles.monthCalendar}>📅</Text>
+
+    <Text style={styles.monthText}>
+      {formattedSelectedMonth}
+    </Text>
+  </View>
+
+  <TouchableOpacity
+    style={[
+      styles.monthArrowButton,
+      isCurrentMonth && {
+        opacity: 0.3,
+      },
+    ]}
+    onPress={goToNextMonth}
+    disabled={isCurrentMonth}
+  >
+    <Text style={styles.monthArrow}>›</Text>
+  </TouchableOpacity>
+</View>
         {/* Card Principal de Saldo */}
         {/* Card Principal de Saldo */}
 <View style={styles.balanceCard}>
@@ -430,44 +558,92 @@ const balanceColor = isPositiveBalance
     </Text>
   ) : (
     filteredTransactions.map((item) => (
-      <View key={item.id} style={styles.transactionCard}>
-        <View style={styles.transactionLeft}>
-          <View
-            style={[
-              styles.indicatorDot,
-              item.type === 'positive'
-                ? styles.dotPositive
-                : item.type === 'negative'
+  <View key={item.id} style={styles.transactionCard}>
+    <View style={styles.transactionHeader}>
+      <View style={styles.transactionLeft}>
+        <View
+          style={[
+            styles.indicatorDot,
+            item.type === 'positive'
+              ? styles.dotPositive
+              : item.type === 'negative'
                 ? styles.dotNegative
                 : styles.dotNeutral,
-            ]}
-          />
+          ]}
+        />
 
-          <View>
-            <Text style={styles.transactionDate}>
-              {item.date}
-            </Text>
+        <View>
+          <Text style={styles.transactionDate}>
+            {item.date}
+          </Text>
 
-            <Text style={styles.transactionDesc}>
-              {item.description}
-            </Text>
-          </View>
+          <Text style={styles.transactionDesc}>
+            {item.description}
+          </Text>
         </View>
+      </View>
 
-        <Text
-          style={[
-            styles.transactionHours,
-            item.type === 'positive'
-              ? styles.hoursPositive
-              : item.type === 'negative'
+      <Text
+        style={[
+          styles.transactionHours,
+          item.type === 'positive'
+            ? styles.hoursPositive
+            : item.type === 'negative'
               ? styles.hoursNegative
               : styles.hoursNeutral,
+        ]}
+      >
+        {item.hours}
+      </Text>
+    </View>
+
+    {item.needsAdjustment && (
+  <TouchableOpacity
+    style={styles.adjustmentButton}
+    onPress={() =>
+      navigation.navigate('Adjustment', {
+        requestedDate: item.dateKey,
+        dateLabel: item.date,
+        punches: item.punches.map(
+          (punch) => punch.time
+        ),
+      })
+    }
+  >
+    <Text style={styles.adjustmentButtonText}>
+      Solicitar ajuste
+    </Text>
+  </TouchableOpacity>
+)}
+
+    <View style={styles.punchesRow}>
+      {item.punches.map((punch) => (
+        <View
+          key={punch.label}
+          style={[
+            styles.punchBox,
+            punch.time === '--:--' &&
+              styles.punchBoxMissing,
           ]}
         >
-          {item.hours}
-        </Text>
-      </View>
-    ))
+          <Text style={styles.punchLabel}>
+            {punch.label}
+          </Text>
+
+          <Text
+            style={[
+              styles.punchTime,
+              punch.time === '--:--' &&
+                styles.punchTimeMissing,
+            ]}
+          >
+            {punch.time}
+          </Text>
+        </View>
+      ))}
+    </View>
+  </View>
+))
   )}
 </View>
       </ScrollView>
@@ -507,6 +683,47 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 32,
   },
+  monthSelector: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  backgroundColor: '#FFFFFF',
+  borderWidth: 1,
+  borderColor: '#E2E8F0',
+  borderRadius: 12,
+  paddingHorizontal: 12,
+  paddingVertical: 12,
+  marginBottom: 16,
+},
+
+monthArrowButton: {
+  width: 36,
+  height: 36,
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+
+monthArrow: {
+  fontSize: 26,
+  color: '#1D4ED8',
+  fontWeight: '500',
+},
+
+monthCenter: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8,
+},
+
+monthCalendar: {
+  fontSize: 17,
+},
+
+monthText: {
+  fontSize: 15,
+  fontWeight: '700',
+  color: '#0F172A',
+},
   balanceCard: {
     backgroundColor: '#1E40AF',
     borderRadius: 16,
@@ -611,15 +828,72 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   transactionCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
+  backgroundColor: '#FFFFFF',
+  borderRadius: 10,
+  padding: 14,
+  borderWidth: 1,
+  borderColor: '#E2E8F0',
+},
+
+transactionHeader: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+},
+
+punchesRow: {
+  flexDirection: 'row',
+  gap: 6,
+  marginTop: 12,
+  paddingTop: 12,
+  borderTopWidth: 1,
+  borderTopColor: '#E2E8F0',
+},
+
+punchBox: {
+  flex: 1,
+  alignItems: 'center',
+  backgroundColor: '#EFF6FF',
+  borderRadius: 7,
+  paddingVertical: 7,
+  paddingHorizontal: 3,
+  borderWidth: 1,
+  borderColor: '#BFDBFE',
+},
+
+punchBoxMissing: {
+  backgroundColor: '#FEF2F2',
+  borderColor: '#FECACA',
+},
+
+punchLabel: {
+  fontSize: 9,
+  color: '#64748B',
+  marginBottom: 3,
+},
+
+punchTime: {
+  fontSize: 11,
+  fontWeight: '700',
+  color: '#1D4ED8',
+},
+
+punchTimeMissing: {
+  color: '#DC2626',
+},
+adjustmentButton: {
+  marginTop: 10,
+  backgroundColor: '#F59E0B',
+  borderRadius: 8,
+  paddingVertical: 10,
+  alignItems: 'center',
+},
+
+adjustmentButtonText: {
+  color: '#FFFFFF',
+  fontSize: 12,
+  fontWeight: '700',
+},
   transactionLeft: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -7,11 +7,14 @@ import {
   SafeAreaView,
   ScrollView,
   Linking,
+  TextInput,
 } from 'react-native';
 import { supabase } from '../services/supabase';
 
 export default function AdminApprovalsScreen({ navigation }) {
   const [realRequests, setRealRequests] = useState([]);
+  const [reviewComments, setReviewComments] =
+  useState({});
   const [
   processingRequestId,
   setProcessingRequestId,
@@ -24,6 +27,17 @@ const [isLoadingRequests, setIsLoadingRequests] = useState(true);
     try {
       setIsLoadingRequests(true);
 
+      const {
+  data: { user: loggedUser },
+  error: loggedUserError,
+} = await supabase.auth.getUser();
+
+if (loggedUserError || !loggedUser) {
+  throw new Error(
+    'Não foi possível identificar o usuário.'
+  );
+}
+
       const { data, error } = await supabase
         .from('adjustment_requests')
         .select(`
@@ -34,6 +48,7 @@ const [isLoadingRequests, setIsLoadingRequests] = useState(true);
           requested_time,
           requested_punches,
           reason,
+          review_comment,
           attachment_url,
           status,
           created_at,
@@ -42,50 +57,167 @@ const [isLoadingRequests, setIsLoadingRequests] = useState(true);
             department
           )
         `)
-        .order('created_at', { ascending: false });
+        .order('created_at', {
+          ascending: false,
+        });
 
       if (error) {
         throw error;
       }
 
-      const formattedRequests = (data || []).map(
-        (request) => ({
-          id: request.id,
-          userId: request.user_id,
-          requestedDate: request.requested_date,
-          requestType: request.request_type,
-          name: request.user?.full_name || 'Funcionário',
-          sector: request.user?.department || 'Sem setor',
-          date: request.requested_date
-            .split('-')
-            .reverse()
-            .join('/'),
-          type:
-            request.request_type === 'TIME_CORRECTION'
-              ? 'Completar/Corrigir marcações'
-              : 'Abono de período',
-          requestedPunches:
-  request.requested_punches || [],
+      const requestsWithPunches =
+        await Promise.all(
+          (data || [])
+  .filter(
+    (request) =>
+      request.user_id !== loggedUser.id
+  )
+  .map(async (request) => {
+            const dayStart =
+              `${request.requested_date}T00:00:00-03:00`;
 
-time:
-  (request.requested_punches || [])
-    .map(
-      (punch) =>
-        `${punch.label.replace(
-          ' (Faltante)',
-          ''
-        )}: ${punch.requested_time}`
-    )
-    .join(' • ') ||
-  request.requested_time ||
-  '--',
-          reason: request.reason,
-          attachment: request.attachment_url,
-          status: request.status.toLowerCase(),
-        })
-      );
+            const dayEnd =
+              `${request.requested_date}T23:59:59-03:00`;
 
-      setRealRequests(formattedRequests);
+            const {
+              data: dayEntries,
+              error: entriesError,
+            } = await supabase
+              .from('time_entries')
+              .select(
+                'id, entry_type, recorded_at'
+              )
+              .eq('user_id', request.user_id)
+              .gte('recorded_at', dayStart)
+              .lte('recorded_at', dayEnd)
+              .order('recorded_at', {
+                ascending: true,
+              });
+
+            if (entriesError) {
+              throw entriesError;
+            }
+
+            const entryTypes = [
+              {
+                type: 'CLOCK_IN',
+                label: 'Entrada',
+              },
+              {
+                type: 'LUNCH_OUT',
+                label: 'Saída almoço',
+              },
+              {
+                type: 'LUNCH_IN',
+                label: 'Volta almoço',
+              },
+              {
+                type: 'CLOCK_OUT',
+                label: 'Saída',
+              },
+            ];
+
+            const requestedByType =
+              Object.fromEntries(
+                (
+                  request.requested_punches || []
+                )
+                  .filter(
+                    (punch) => punch.entry_type
+                  )
+                  .map((punch) => [
+                    punch.entry_type,
+                    punch,
+                  ])
+              );
+
+            const entryByType =
+              Object.fromEntries(
+                (dayEntries || []).map((entry) => [
+                  entry.entry_type,
+                  entry,
+                ])
+              );
+
+            const punchComparison =
+              entryTypes.map((item) => {
+                const databaseEntry =
+                  entryByType[item.type];
+
+                const requestedPunch =
+                  requestedByType[item.type];
+
+                const currentTime =
+                  databaseEntry
+                    ? new Intl.DateTimeFormat(
+                        'pt-BR',
+                        {
+                          timeZone:
+                            'America/Sao_Paulo',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: false,
+                        }
+                      ).format(
+                        new Date(
+                          databaseEntry.recorded_at
+                        )
+                      )
+                    : '--:--';
+
+                return {
+                  entryId:
+                    databaseEntry?.id || null,
+                  entryType: item.type,
+                  label: item.label,
+                  originalTime:
+                    requestedPunch?.original_time ||
+                    currentTime,
+                  requestedTime:
+                    requestedPunch?.requested_time ||
+                    null,
+                  wasRequested:
+                    Boolean(requestedPunch),
+                };
+              });
+
+            return {
+              id: request.id,
+              userId: request.user_id,
+              requestedDate:
+                request.requested_date,
+              requestType:
+                request.request_type,
+              name:
+                request.user?.full_name ||
+                'Funcionário',
+              sector:
+                request.user?.department ||
+                'Sem setor',
+              date: request.requested_date
+                .split('-')
+                .reverse()
+                .join('/'),
+              type:
+                request.request_type ===
+                'TIME_CORRECTION'
+                  ? 'Completar/Corrigir marcações'
+                  : 'Abono de período',
+              requestedPunches:
+                request.requested_punches || [],
+              punchComparison,
+              reason: request.reason,
+              reviewComment:
+                request.review_comment || '',
+              attachment:
+                request.attachment_url,
+              status:
+                request.status.toLowerCase(),
+            };
+          })
+        );
+
+      setRealRequests(requestsWithPunches);
     } catch (error) {
       console.error(
         'Erro ao carregar solicitações:',
@@ -147,18 +279,28 @@ const handleOpenAttachment = async (
     return;
   }
 
+  const managerComment =
+    (reviewComments[id] || '').trim();
+
+  if (!managerComment) {
+    alert(
+      'Informe o parecer do gerente antes de aprovar ou recusar.'
+    );
+    return;
+  }
+
+  const selectedRequest = realRequests.find(
+    (request) => request.id === id
+  );
+
+  if (!selectedRequest) {
+    alert('Solicitação não encontrada.');
+    return;
+  }
+
   setProcessingRequestId(id);
 
   try {
-    const selectedRequest = realRequests.find(
-  (request) => request.id === id
-);
-
-if (!selectedRequest) {
-  throw new Error(
-    'Solicitação não encontrada.'
-  );
-}
     const {
       data: { session },
       error: authError,
@@ -167,7 +309,9 @@ if (!selectedRequest) {
     const manager = session?.user;
 
     if (authError || !manager) {
-      throw new Error('Gestor não autenticado.');
+      throw new Error(
+        'Gestor não autenticado.'
+      );
     }
 
     const databaseStatus =
@@ -175,60 +319,99 @@ if (!selectedRequest) {
         ? 'APPROVED'
         : 'REJECTED';
 
+    if (
+      newStatus === 'approved' &&
+      selectedRequest.requestType ===
+        'TIME_CORRECTION'
+    ) {
+      const validPunches =
+        selectedRequest.requestedPunches.filter(
+          (punch) =>
+            punch.entry_type &&
+            punch.requested_time
+        );
+
+      if (validPunches.length === 0) {
+        throw new Error(
+          'Esta solicitação não possui horários válidos.'
+        );
+      }
+
+      for (const punch of validPunches) {
+        const comparison =
+          selectedRequest.punchComparison.find(
+            (item) =>
+              item.entryType ===
+              punch.entry_type
+          );
+
+        const correctedDate = new Date(
+          `${selectedRequest.requestedDate}T${punch.requested_time}:00-03:00`
+        );
+
         if (
-  newStatus === 'approved' &&
-  selectedRequest.requestType ===
-    'TIME_CORRECTION'
-) {
-  const validPunches =
-    selectedRequest.requestedPunches.filter(
-      (punch) =>
-        punch.entry_type &&
-        punch.requested_time
-    );
+          Number.isNaN(
+            correctedDate.getTime()
+          )
+        ) {
+          throw new Error(
+            `Horário inválido: ${punch.requested_time}`
+          );
+        }
 
-  if (validPunches.length === 0) {
-    throw new Error(
-      'Esta solicitação não possui horários válidos para inclusão.'
-    );
-  }
+        const correctedEntry = {
+          recorded_at:
+            correctedDate.toISOString(),
+          within_geofence: false,
+          created_offline: false,
+          sync_status: 'SYNCED',
+          notes:
+            'Horário corrigido por solicitação aprovada.',
+        };
 
-  const entriesToInsert = validPunches.map(
-    (punch) => ({
-      user_id: selectedRequest.userId,
-      entry_type: punch.entry_type,
-      recorded_at: new Date(
-        `${selectedRequest.requestedDate}T${punch.requested_time}:00-03:00`
-      ).toISOString(),
-      within_geofence: false,
-      created_offline: false,
-      sync_status: 'SYNCED',
-      notes:
-        'Batida incluída por solicitação de ajuste aprovada.',
-    })
-  );
+        if (comparison?.entryId) {
+          const { error: updateEntryError } =
+            await supabase
+              .from('time_entries')
+              .update(correctedEntry)
+              .eq('id', comparison.entryId);
 
-  const { error: insertEntriesError } =
-    await supabase
-      .from('time_entries')
-      .insert(entriesToInsert);
+          if (updateEntryError) {
+            throw updateEntryError;
+          }
+        } else {
+          const { error: insertEntryError } =
+            await supabase
+              .from('time_entries')
+              .insert({
+                user_id:
+                  selectedRequest.userId,
+                entry_type:
+                  punch.entry_type,
+                ...correctedEntry,
+              });
 
-  if (insertEntriesError) {
-    throw insertEntriesError;
-  }
-}
+          if (insertEntryError) {
+            throw insertEntryError;
+          }
+        }
+      }
+    }
 
-    const { error } = await supabase
-      .from('adjustment_requests')
-      .update({
-        status: databaseStatus,
-        reviewed_by: manager.id,
-        reviewed_at: new Date().toISOString(),
-      })
-      .eq('id', id);
+    const { error: requestError } =
+      await supabase
+        .from('adjustment_requests')
+        .update({
+          status: databaseStatus,
+          reviewed_by: manager.id,
+          reviewed_at:
+            new Date().toISOString(),
+          review_comment: managerComment,
+        })
+        .eq('id', id);
 
-    if (error) {
-      throw error;
+    if (requestError) {
+      throw requestError;
     }
 
     setRealRequests((currentRequests) =>
@@ -237,14 +420,28 @@ if (!selectedRequest) {
           ? {
               ...request,
               status: newStatus,
+              reviewComment:
+                managerComment,
             }
           : request
       )
     );
 
+    setReviewComments(
+      (currentComments) => {
+        const updatedComments = {
+          ...currentComments,
+        };
+
+        delete updatedComments[id];
+
+        return updatedComments;
+      }
+    );
+
     alert(
       newStatus === 'approved'
-        ? 'Solicitação aprovada com sucesso!'
+        ? 'Solicitação aprovada e horários atualizados!'
         : 'Solicitação recusada com sucesso!'
     );
   } catch (error) {
@@ -343,15 +540,126 @@ const rejectedCount = realRequests.filter(
                   </View>
                 </View>
 
-                <View style={styles.metaRow}>
-                  <Text style={styles.metaLabel}>Data: <Text style={styles.metaValue}>{req.date}</Text></Text>
-                  <Text style={styles.metaLabel}>Horas: <Text style={styles.metaHighlight}>{req.time}</Text></Text>
-                </View>
+                <View style={styles.requestDateRow}>
+  <Text style={styles.requestDateLabel}>
+    Data da solicitação
+  </Text>
 
-                <View style={styles.reasonBox}>
-                  <Text style={styles.reasonLabel}>Justificativa:</Text>
-                  <Text style={styles.reasonText}>{req.reason}</Text>
-                </View>
+  <Text style={styles.requestDateValue}>
+    {req.date}
+  </Text>
+</View>
+
+{req.requestType === 'TIME_CORRECTION' && (
+  <View style={styles.punchesComparisonBox}>
+    <Text style={styles.punchesComparisonTitle}>
+      Marcações do dia
+    </Text>
+
+    {req.punchComparison.map((punch) => (
+      <View
+        key={punch.entryType}
+        style={styles.punchComparisonRow}
+      >
+        <Text style={styles.punchComparisonLabel}>
+          {punch.label}
+        </Text>
+
+        <View style={styles.punchComparisonTimes}>
+          {punch.wasRequested ? (
+            <>
+              <Text
+                style={[
+                  styles.originalPunchTime,
+                  punch.originalTime === '--:--' &&
+                    styles.missingPunchTime,
+                ]}
+              >
+                {punch.originalTime}
+              </Text>
+
+              <Text style={styles.punchArrow}>→</Text>
+
+              <Text style={styles.requestedPunchTime}>
+                {punch.requestedTime}
+              </Text>
+            </>
+          ) : (
+            <Text
+              style={[
+                styles.unchangedPunchTime,
+                punch.originalTime === '--:--' &&
+                  styles.missingPunchTime,
+              ]}
+            >
+              {punch.originalTime === '--:--'
+                ? 'Faltante'
+                : punch.originalTime}
+            </Text>
+          )}
+        </View>
+      </View>
+    ))}
+
+    <View style={styles.comparisonLegend}>
+      <Text style={styles.legendOriginal}>
+        Horário original
+      </Text>
+
+      <Text style={styles.legendRequested}>
+        Horário solicitado
+      </Text>
+    </View>
+  </View>
+)}
+
+<View style={styles.reasonBox}>
+  <Text style={styles.reasonLabel}>
+    Justificativa do funcionário:
+  </Text>
+
+  <Text style={styles.reasonText}>
+    {req.reason}
+  </Text>
+</View>
+
+{req.status === 'pending' ? (
+  <View style={styles.reviewBox}>
+    <Text style={styles.reviewLabel}>
+      Parecer do gerente
+    </Text>
+
+    <TextInput
+      style={styles.reviewInput}
+      value={reviewComments[req.id] || ''}
+      onChangeText={(text) =>
+        setReviewComments((currentComments) => ({
+          ...currentComments,
+          [req.id]: text,
+        }))
+      }
+      placeholder="Informe o motivo da aprovação ou recusa..."
+      placeholderTextColor="#94A3B8"
+      multiline
+      maxLength={300}
+    />
+
+    <Text style={styles.reviewCounter}>
+      {(reviewComments[req.id] || '').length}/300
+    </Text>
+  </View>
+) : (
+  <View style={styles.reviewResultBox}>
+    <Text style={styles.reviewLabel}>
+      Parecer do gerente:
+    </Text>
+
+    <Text style={styles.reviewResultText}>
+      {req.reviewComment ||
+        'Nenhum parecer registrado.'}
+    </Text>
+  </View>
+)}
 
                 {req.attachment && (
   <TouchableOpacity
@@ -610,4 +918,156 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: 'center',
   },
+  requestDateRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  paddingBottom: 10,
+  marginBottom: 10,
+  borderBottomWidth: 1,
+  borderBottomColor: '#E2E8F0',
+},
+
+requestDateLabel: {
+  fontSize: 12,
+  color: '#64748B',
+},
+
+requestDateValue: {
+  fontSize: 13,
+  color: '#0F172A',
+  fontWeight: '700',
+},
+
+punchesComparisonBox: {
+  backgroundColor: '#F8FAFC',
+  borderWidth: 1,
+  borderColor: '#E2E8F0',
+  borderRadius: 10,
+  padding: 12,
+  marginBottom: 12,
+},
+
+punchesComparisonTitle: {
+  fontSize: 12,
+  fontWeight: '700',
+  color: '#334155',
+  marginBottom: 8,
+},
+
+punchComparisonRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  minHeight: 34,
+  paddingVertical: 6,
+  borderBottomWidth: 1,
+  borderBottomColor: '#E2E8F0',
+},
+
+punchComparisonLabel: {
+  flex: 1,
+  fontSize: 12,
+  color: '#475569',
+  fontWeight: '600',
+},
+
+punchComparisonTimes: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  minWidth: 115,
+  gap: 7,
+},
+
+originalPunchTime: {
+  fontSize: 13,
+  color: '#64748B',
+  fontWeight: '600',
+  textDecorationLine: 'line-through',
+},
+
+requestedPunchTime: {
+  fontSize: 13,
+  color: '#2563EB',
+  fontWeight: '800',
+},
+
+unchangedPunchTime: {
+  fontSize: 13,
+  color: '#16A34A',
+  fontWeight: '700',
+},
+
+missingPunchTime: {
+  color: '#DC2626',
+  textDecorationLine: 'none',
+},
+
+punchArrow: {
+  fontSize: 13,
+  color: '#94A3B8',
+},
+
+comparisonLegend: {
+  flexDirection: 'row',
+  justifyContent: 'flex-end',
+  gap: 12,
+  marginTop: 10,
+},
+
+legendOriginal: {
+  fontSize: 10,
+  color: '#64748B',
+},
+
+legendRequested: {
+  fontSize: 10,
+  color: '#2563EB',
+  fontWeight: '600',
+},
+
+reviewBox: {
+  marginBottom: 12,
+},
+
+reviewLabel: {
+  fontSize: 12,
+  color: '#475569',
+  fontWeight: '700',
+  marginBottom: 6,
+},
+
+reviewInput: {
+  minHeight: 76,
+  borderWidth: 1,
+  borderColor: '#CBD5E1',
+  borderRadius: 8,
+  paddingHorizontal: 10,
+  paddingVertical: 10,
+  fontSize: 13,
+  color: '#0F172A',
+  backgroundColor: '#FFFFFF',
+  textAlignVertical: 'top',
+},
+
+reviewCounter: {
+  fontSize: 10,
+  color: '#94A3B8',
+  textAlign: 'right',
+  marginTop: 3,
+},
+
+reviewResultBox: {
+  backgroundColor: '#F8FAFC',
+  borderRadius: 8,
+  padding: 10,
+  marginBottom: 12,
+},
+
+reviewResultText: {
+  fontSize: 13,
+  color: '#1E293B',
+  lineHeight: 18,
+},
 });

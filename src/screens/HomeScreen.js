@@ -9,13 +9,16 @@ import {
   ScrollView,
   Alert,
   Platform,
+  Modal,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function HomeScreen({ navigation, route }) {
   const { todayPunches, recordPunch } = useApp();
   const profile = route.params?.profile;
+  const isManager = profile?.role === 'MANAGER';
   const permiteHomeOffice = profile?.allow_home_office === true;
 const displayName = profile?.full_name || 'Funcionário';
 const initials = displayName
@@ -31,6 +34,139 @@ const [distanciaDaSede, setDistanciaDaSede] = useState(null);
 const [dentroDaArea, setDentroDaArea] = useState(false);
   const [assignedWorkMode, setAssignedWorkMode] = useState('base');
 // 'base' | 'home' | 'externo'
+
+const [notifications, setNotifications] = useState([]);
+const [unreadNotifications, setUnreadNotifications] =
+  useState(0);
+const [notificationsVisible, setNotificationsVisible] =
+  useState(false);
+
+const [managerMenuVisible, setManagerMenuVisible] =
+  useState(false);
+
+const notificationsStorageKey =
+  `@smarttime:seen_notifications:${profile?.id || 'user'}`;
+
+const loadNotifications = async () => {
+  if (!profile?.id) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('adjustment_requests')
+    .select(
+  'id, requested_date, request_type, requested_punches, status, created_at'
+)
+    .eq('user_id', profile.id)
+    .in('status', ['APPROVED', 'REJECTED'])
+    .order('created_at', {
+      ascending: false,
+    })
+    .limit(20);
+
+  if (error) {
+    console.error(
+      'Erro ao carregar notificações:',
+      error
+    );
+
+    return [];
+  }
+
+  const notificationRows = data || [];
+
+  setNotifications(notificationRows);
+
+  const savedIds = await AsyncStorage.getItem(
+    notificationsStorageKey
+  );
+
+  const seenIds = savedIds
+    ? JSON.parse(savedIds)
+    : [];
+
+  const unread = notificationRows.filter(
+    (item) => !seenIds.includes(item.id)
+  ).length;
+
+  setUnreadNotifications(unread);
+
+  return notificationRows;
+};
+
+const handleOpenNotifications = async () => {
+  const notificationRows =
+    await loadNotifications();
+
+  setNotificationsVisible(true);
+
+  const notificationIds =
+    notificationRows.map((item) => item.id);
+
+  await AsyncStorage.setItem(
+    notificationsStorageKey,
+    JSON.stringify(notificationIds)
+  );
+
+  setUnreadNotifications(0);
+};
+
+const handleNotificationPress = (notification) => {
+  setNotificationsVisible(false);
+
+  if (notification.status === 'APPROVED') {
+    navigation.navigate('History', {
+      profile,
+    });
+
+    return;
+  }
+
+  const entryTypes = [
+    'CLOCK_IN',
+    'LUNCH_OUT',
+    'LUNCH_IN',
+    'CLOCK_OUT',
+  ];
+
+  const notificationPunches = entryTypes.map(
+    (entryType) => {
+      const requestedPunch =
+        notification.requested_punches?.find(
+          (punch) =>
+            punch.entry_type === entryType
+        );
+
+      return (
+        requestedPunch?.requested_time ||
+        '--:--'
+      );
+    }
+  );
+
+  const [year, month, day] =
+    notification.requested_date.split('-');
+
+  navigation.navigate('Adjustment', {
+    requestedDate:
+      notification.requested_date,
+    dateLabel: `${day}/${month}/${year}`,
+    punches: notificationPunches,
+  });
+};
+
+useEffect(() => {
+  loadNotifications();
+
+  const notificationTimer = setInterval(
+    loadNotifications,
+    30000
+  );
+
+  return () => {
+    clearInterval(notificationTimer);
+  };
+}, [profile?.id]);
 
 useEffect(() => {
   const carregarModoTrabalho = async () => {
@@ -338,20 +474,41 @@ if (Platform.OS === 'web') {
         {/* Cabeçalho Superior */}
         <View style={styles.topHeader}>
           <View style={styles.headerBar}>
-            <TouchableOpacity
-              style={styles.menuButton}
-              onPress={() => navigation.navigate('AdminUsers')}
-            >
-              <Text style={styles.menuIcon}>☰</Text>
-            </TouchableOpacity>
-
+            <View style={styles.headerSideSpace} />
+            {isManager ? (
+  <TouchableOpacity
+    style={styles.managerMenuButton}
+    onPress={() =>
+      setManagerMenuVisible(true)
+    }
+  >
+    <Text style={styles.managerMenuIcon}>
+      ☰
+    </Text>
+  </TouchableOpacity>
+) : (
+  <View style={styles.headerSideSpace} />
+)}
             <View style={styles.avatarContainer}>
               <Text style={styles.avatarText}>{initials}</Text>
             </View>
 
-            <TouchableOpacity style={styles.notificationButton}>
-              <Text style={styles.bellIcon}>🔔</Text>
-            </TouchableOpacity>
+            <TouchableOpacity
+  style={styles.notificationButton}
+  onPress={handleOpenNotifications}
+>
+  <Text style={styles.bellIcon}>🔔</Text>
+
+  {unreadNotifications > 0 && (
+    <View style={styles.notificationBadge}>
+      <Text style={styles.notificationBadgeText}>
+        {unreadNotifications > 9
+          ? '9+'
+          : unreadNotifications}
+      </Text>
+    </View>
+  )}
+</TouchableOpacity>
           </View>
 
           <View style={styles.greetingContainer}>
@@ -529,7 +686,246 @@ if (Platform.OS === 'web') {
           </TouchableOpacity>
         </View>
       </ScrollView>
-    </SafeAreaView>
+
+      <Modal
+  visible={managerMenuVisible}
+  transparent
+  animationType="fade"
+  onRequestClose={() =>
+    setManagerMenuVisible(false)
+  }
+>
+  <View style={styles.managerMenuOverlay}>
+    <TouchableOpacity
+      style={styles.managerMenuBackdrop}
+      activeOpacity={1}
+      onPress={() =>
+        setManagerMenuVisible(false)
+      }
+    />
+
+    <View style={styles.managerMenuPanel}>
+      <View style={styles.managerMenuHeader}>
+        <View style={styles.managerMenuAvatar}>
+          <Text style={styles.managerMenuAvatarText}>
+            {initials}
+          </Text>
+        </View>
+
+        <View style={styles.managerMenuUserInfo}>
+          <Text style={styles.managerMenuName}>
+            {displayName}
+          </Text>
+
+          <Text style={styles.managerMenuRole}>
+            Gerente • {profile?.department}
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          onPress={() =>
+            setManagerMenuVisible(false)
+          }
+        >
+          <Text style={styles.managerMenuClose}>
+            ✕
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity
+        style={styles.managerMenuItem}
+        onPress={() =>
+          setManagerMenuVisible(false)
+        }
+      >
+        <Text style={styles.managerMenuItemIcon}>
+          🕒
+        </Text>
+
+        <Text style={styles.managerMenuItemText}>
+          Meu ponto
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.managerMenuItem}
+        onPress={() => {
+          setManagerMenuVisible(false);
+
+          navigation.navigate('AdminUsers', {
+            profile,
+          });
+        }}
+      >
+        <Text style={styles.managerMenuItemIcon}>
+          👥
+        </Text>
+
+        <Text style={styles.managerMenuItemText}>
+          Usuários do setor
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.managerMenuItem}
+        onPress={() => {
+          setManagerMenuVisible(false);
+
+          navigation.navigate(
+            'AdminApprovals'
+          );
+        }}
+      >
+        <Text style={styles.managerMenuItemIcon}>
+          ✅
+        </Text>
+
+        <Text style={styles.managerMenuItemText}>
+          Solicitações de ajuste
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.managerMenuItem}
+        onPress={() => {
+          setManagerMenuVisible(false);
+
+          navigation.navigate(
+            'AdminReports'
+          );
+        }}
+      >
+        <Text style={styles.managerMenuItemIcon}>
+          📊
+        </Text>
+
+        <Text style={styles.managerMenuItemText}>
+          Relatórios do setor
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[
+          styles.managerMenuItem,
+          styles.managerMenuLogout,
+        ]}
+        onPress={() => {
+          setManagerMenuVisible(false);
+          handleLogout();
+        }}
+      >
+        <Text style={styles.managerMenuItemIcon}>
+          🚪
+        </Text>
+
+        <Text style={styles.managerMenuLogoutText}>
+          Sair
+        </Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+</Modal>
+
+<Modal
+  visible={notificationsVisible}
+  transparent
+  animationType="fade"
+  onRequestClose={() =>
+    setNotificationsVisible(false)
+  }
+>
+  <View style={styles.notificationOverlay}>
+    <View style={styles.notificationModal}>
+      <View style={styles.notificationModalHeader}>
+        <Text style={styles.notificationModalTitle}>
+          Notificações
+        </Text>
+
+        <TouchableOpacity
+          onPress={() =>
+            setNotificationsVisible(false)
+          }
+        >
+          <Text style={styles.notificationClose}>
+            ✕
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        style={styles.notificationList}
+        showsVerticalScrollIndicator={false}
+      >
+        {notifications.length === 0 ? (
+          <Text style={styles.emptyNotificationText}>
+            Nenhuma notificação disponível.
+          </Text>
+        ) : (
+          notifications.map((item) => {
+            const approved =
+              item.status === 'APPROVED';
+
+            const dateParts =
+              item.requested_date.split('-');
+
+            const formattedDate =
+              `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
+
+            return (
+  <TouchableOpacity
+    key={item.id}
+    style={styles.notificationItem}
+    onPress={() =>
+      handleNotificationPress(item)
+    }
+  >
+    <View
+      style={[
+        styles.notificationStatusIcon,
+        approved
+          ? styles.notificationApproved
+          : styles.notificationRejected,
+      ]}
+    >
+      <Text
+        style={styles.notificationStatusIconText}
+      >
+        {approved ? '✓' : '✕'}
+      </Text>
+    </View>
+
+    <View style={{ flex: 1 }}>
+      <Text style={styles.notificationItemTitle}>
+        Solicitação {approved
+          ? 'aprovada'
+          : 'recusada'}
+      </Text>
+
+      <Text style={styles.notificationItemText}>
+        Ajuste referente a {formattedDate}
+      </Text>
+
+      <Text style={styles.notificationActionText}>
+        {approved
+          ? 'Ver no histórico'
+          : 'Corrigir e reenviar'}
+      </Text>
+    </View>
+
+    <Text style={styles.notificationChevron}>
+      ›
+    </Text>
+  </TouchableOpacity>
+);
+          })
+        )}
+      </ScrollView>
+    </View>
+  </View>
+</Modal>
+
+</SafeAreaView>
   );
 }
 
@@ -544,6 +940,12 @@ const styles = StyleSheet.create({
   alignSelf: 'center',
   paddingBottom: 24,
 },
+headerSideSpace: {
+  position: 'absolute',
+  left: 0,
+  width: 40,
+  height: 40,
+},
   topHeader: {
     backgroundColor: '#1E40AF',
     paddingTop: 16,
@@ -553,11 +955,14 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 28,
   },
   headerBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
+  position: 'relative',
+  width: '100%',
+  height: 44,
+  flexDirection: 'row',
+  justifyContent: 'center',
+  alignItems: 'center',
+  marginBottom: 16,
+},
   menuButton: {
     padding: 6,
   },
@@ -582,8 +987,34 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   notificationButton: {
-    padding: 6,
-  },
+  position: 'absolute',
+  right: 0,
+  width: 40,
+  height: 40,
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+
+notificationBadge: {
+  position: 'absolute',
+  top: -2,
+  right: -3,
+  minWidth: 17,
+  height: 17,
+  borderRadius: 9,
+  paddingHorizontal: 4,
+  backgroundColor: '#DC2626',
+  borderWidth: 2,
+  borderColor: '#1E40AF',
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+
+notificationBadgeText: {
+  color: '#FFFFFF',
+  fontSize: 9,
+  fontWeight: '800',
+},
   bellIcon: {
     fontSize: 20,
   },
@@ -837,4 +1268,226 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#334155',
   },
+  notificationOverlay: {
+  flex: 1,
+  backgroundColor: 'rgba(15, 23, 42, 0.55)',
+  justifyContent: 'center',
+  alignItems: 'center',
+  padding: 20,
+},
+
+notificationModal: {
+  width: '100%',
+  maxWidth: 420,
+  maxHeight: '75%',
+  backgroundColor: '#FFFFFF',
+  borderRadius: 16,
+  padding: 18,
+},
+
+notificationModalHeader: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  paddingBottom: 14,
+  borderBottomWidth: 1,
+  borderBottomColor: '#E2E8F0',
+},
+
+notificationModalTitle: {
+  fontSize: 18,
+  fontWeight: '800',
+  color: '#0F172A',
+},
+
+notificationClose: {
+  fontSize: 18,
+  color: '#64748B',
+  padding: 4,
+},
+
+notificationList: {
+  marginTop: 8,
+},
+
+notificationItem: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 12,
+  paddingVertical: 14,
+  borderBottomWidth: 1,
+  borderBottomColor: '#E2E8F0',
+},
+
+notificationStatusIcon: {
+  width: 34,
+  height: 34,
+  borderRadius: 17,
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+
+notificationApproved: {
+  backgroundColor: '#DCFCE7',
+},
+
+notificationRejected: {
+  backgroundColor: '#FEE2E2',
+},
+
+notificationStatusIconText: {
+  fontSize: 16,
+  fontWeight: '800',
+  color: '#0F172A',
+},
+
+notificationItemTitle: {
+  fontSize: 14,
+  fontWeight: '700',
+  color: '#0F172A',
+},
+
+notificationItemText: {
+  fontSize: 12,
+  color: '#64748B',
+  marginTop: 3,
+},
+
+notificationActionText: {
+  fontSize: 11,
+  color: '#1D4ED8',
+  fontWeight: '700',
+  marginTop: 5,
+},
+
+notificationChevron: {
+  fontSize: 24,
+  color: '#94A3B8',
+  marginLeft: 8,
+},
+
+emptyNotificationText: {
+  textAlign: 'center',
+  color: '#64748B',
+  paddingVertical: 30,
+},
+managerMenuButton: {
+  position: 'absolute',
+  left: 0,
+  width: 40,
+  height: 40,
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+
+managerMenuIcon: {
+  color: '#FFFFFF',
+  fontSize: 25,
+  fontWeight: '700',
+},
+managerMenuOverlay: {
+  flex: 1,
+  backgroundColor: 'rgba(15, 23, 42, 0.45)',
+},
+
+managerMenuBackdrop: {
+  ...StyleSheet.absoluteFillObject,
+},
+
+managerMenuPanel: {
+  width: '82%',
+  maxWidth: 340,
+  height: '100%',
+  backgroundColor: '#FFFFFF',
+  paddingTop: 28,
+  paddingHorizontal: 18,
+  shadowColor: '#000000',
+  shadowOffset: {
+    width: 4,
+    height: 0,
+  },
+  shadowOpacity: 0.2,
+  shadowRadius: 12,
+  elevation: 10,
+},
+
+managerMenuHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingBottom: 20,
+  marginBottom: 10,
+  borderBottomWidth: 1,
+  borderBottomColor: '#E2E8F0',
+},
+
+managerMenuAvatar: {
+  width: 42,
+  height: 42,
+  borderRadius: 21,
+  backgroundColor: '#1D4ED8',
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+
+managerMenuAvatarText: {
+  color: '#FFFFFF',
+  fontSize: 14,
+  fontWeight: '800',
+},
+
+managerMenuUserInfo: {
+  flex: 1,
+  marginLeft: 10,
+},
+
+managerMenuName: {
+  fontSize: 14,
+  fontWeight: '700',
+  color: '#0F172A',
+},
+
+managerMenuRole: {
+  fontSize: 11,
+  color: '#64748B',
+  marginTop: 2,
+},
+
+managerMenuClose: {
+  fontSize: 18,
+  color: '#64748B',
+  padding: 6,
+},
+
+managerMenuItem: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  minHeight: 52,
+  paddingHorizontal: 10,
+  borderRadius: 9,
+  marginBottom: 5,
+},
+
+managerMenuItemIcon: {
+  width: 30,
+  fontSize: 18,
+},
+
+managerMenuItemText: {
+  fontSize: 14,
+  color: '#1E293B',
+  fontWeight: '600',
+},
+
+managerMenuLogout: {
+  marginTop: 12,
+  borderTopWidth: 1,
+  borderTopColor: '#E2E8F0',
+  borderRadius: 0,
+},
+
+managerMenuLogoutText: {
+  fontSize: 14,
+  color: '#DC2626',
+  fontWeight: '700',
+},
 });

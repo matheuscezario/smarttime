@@ -525,11 +525,6 @@ const rowsHtml = [
               ${rowsHtml}
             </tbody>
           </table>
-
-          <div class="signature-area">
-            <div class="signature-line"></div>
-            <p>Assinatura Digital do Colaborador</p>
-          </div>
         </body>
         </html>
       `;
@@ -699,9 +694,7 @@ const isViewingCurrentMonth =
           <Text style={styles.backButtonText}>‹</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Meu Histórico</Text>
-        <TouchableOpacity style={styles.filterButton}>
-          <Text style={styles.filterIcon}>🔍</Text>
-        </TouchableOpacity>
+        <View style={{ width: 28 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -730,98 +723,99 @@ const isViewingCurrentMonth =
 </TouchableOpacity>
         </View>
         {isViewingCurrentMonth && (
-          <>
+  <>
+    <Text style={styles.sectionHeader}>
+      Hoje em tempo real
+    </Text>
 
-        <Text style={styles.sectionHeader}>Hoje em tempo real</Text>
-        <View style={[styles.dayCard, styles.todayCard]}>
-          <View style={styles.cardTopRow}>
-            <View>
-              <Text style={styles.dayText}>Hoje (Em andamento)</Text>
-              <Text style={styles.todaySubText}>{recordedCount} de 4 batidas registradas</Text>
-            </View>
-            <View
-  style={[
-    styles.statusBadge,
-    hasApprovedTodayAbsence ||
-    recordedCount === 4
-      ? styles.badgeSuccess
-      : styles.badgeProgress,
-  ]}
->
-  <Text
-    style={[
-      styles.statusBadgeText,
-      hasApprovedTodayAbsence ||
-      recordedCount === 4
-        ? styles.textSuccess
-        : styles.textProgress,
-    ]}
-  >
-    {hasApprovedTodayAbsence
-      ? 'Abonado'
-      : recordedCount === 4
-        ? 'Completo'
-        : 'Em curso'}
-  </Text>
-</View>
+    <View style={[styles.dayCard, styles.todayCard]}>
+      <View style={styles.cardTopRow}>
+        <View>
+          <Text style={styles.dayText}>
+            Hoje (Em andamento)
+          </Text>
+
+          <Text style={styles.todaySubText}>
+            {recordedCount} de 4 batidas registradas
+          </Text>
+        </View>
+
+        <View
+          style={[
+            styles.statusBadge,
+            hasApprovedTodayAbsence || recordedCount === 4
+              ? styles.badgeSuccess
+              : styles.badgeProgress,
+          ]}
+        >
+          <Text
+            style={[
+              styles.statusBadgeText,
+              hasApprovedTodayAbsence || recordedCount === 4
+                ? styles.textSuccess
+                : styles.textProgress,
+            ]}
+          >
+            {hasApprovedTodayAbsence
+              ? 'Abonado'
+              : recordedCount === 4
+                ? 'Completo'
+                : 'Em curso'}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.punchesPillRow}>
+        {todayEntries.map((time, idx) => (
+          <View
+            key={idx}
+            style={[
+              styles.punchPill,
+              time !== '--:--'
+                ? styles.punchPillActive
+                : styles.punchPillEmpty,
+            ]}
+          >
+            <Text
+              style={[
+                styles.punchPillText,
+                time !== '--:--'
+                  ? styles.punchTextActive
+                  : styles.punchTextEmpty,
+              ]}
+            >
+              {time}
+            </Text>
           </View>
+        ))}
+      </View>
 
-          <View style={styles.punchesPillRow}>
-            {todayEntries.map((time, idx) => (
-              <View
-                key={idx}
-                style={[
-                  styles.punchPill,
-                  time !== '--:--' ? styles.punchPillActive : styles.punchPillEmpty,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.punchPillText,
-                    time !== '--:--' ? styles.punchTextActive : styles.punchTextEmpty,
-                  ]}
-                >
-                  {time}
-                </Text>
-              </View>
-            ))}
-          </View>
+      <View style={styles.cardBottomRow}>
+        <Text style={styles.totalHoursText}>
+          Total: {todayTotalHours}
+        </Text>
 
-          <View style={styles.cardBottomRow}>
-            <Text style={styles.totalHoursText}>
-  Total: {todayTotalHours}
-</Text>
-            {recordedCount < 4 &&
-  !hasApprovedTodayAbsence && (
-  <TouchableOpacity
-    style={[
-      styles.btnAdjust,
-      hasPendingTodayAdjustment && {
-        opacity: 0.6,
-      },
-    ]}
-    disabled={hasPendingTodayAdjustment}
-                onPress={() =>
-  navigation.navigate('Adjustment', {
-    requestedDate: todayDate,
-    dateLabel: todayDateLabel,
-    punches: todayEntries,
-  })
-}
-              >
-                <Text style={styles.btnAdjustText}>
-  {hasPendingTodayAdjustment
-    ? 'Solicitação pendente'
-    : 'Solicitar ajuste'}
-</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-                </View>
-      </>
-    )}
-
-        <Text style={styles.sectionHeader}>Dias anteriores</Text>
+        {recordedCount < 4 &&
+          !hasApprovedTodayAbsence && (
+            <TouchableOpacity
+              style={[
+                styles.btnAdjust,
+                {
+                  opacity: 0.55,
+                  backgroundColor: '#94A3B8',
+                },
+              ]}
+              disabled
+            >
+              <Text style={styles.btnAdjustText}>
+                Disponível amanhã
+              </Text>
+            </TouchableOpacity>
+          )}
+      </View>
+    </View>
+  </>
+)}
         <View style={styles.historyList}>
   {!isLoadingHistory &&
     realHistoryData.length === 0 && (
@@ -894,7 +888,7 @@ const isViewingCurrentMonth =
 
               <View style={styles.cardBottomRow}>
                 <Text style={styles.totalHoursText}>Total: {item.totalHours}</Text>
-                {item.isIncomplete && (
+                {!item.hasApprovedAbsence && (
   <TouchableOpacity
     style={[
       styles.btnAdjust,
@@ -1026,11 +1020,6 @@ const isViewingCurrentMonth =
                     <Text style={[styles.tableCol, styles.colTotal]}>{item.totalHours.split(' ')[0]}</Text>
                   </View>
                 ))}
-              </View>
-
-              <View style={styles.signatureSection}>
-                <View style={styles.signatureLine} />
-                <Text style={styles.signatureLabel}>Assinatura do Colaborador (Digital)</Text>
               </View>
             </ScrollView>
 

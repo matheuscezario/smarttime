@@ -71,22 +71,30 @@ useEffect(() => {
     try {
       setLoadingUsers(true);
 
-      const { data, error } = await supabase
-        .from('profiles')
-        .select(`
-          id,
-          company_id,
-          work_schedule_id,
-          full_name,
-          role,
-          department,
-          employee_code,
-          allow_home_office,
-          allow_external_work,
-          active
-        `)
-        .eq('active', true)
-        .order('full_name');
+      let profilesQuery = supabase
+  .from('profiles')
+  .select(`
+    id,
+    company_id,
+    work_schedule_id,
+    full_name,
+    role,
+    department,
+    employee_code,
+    allow_home_office,
+    allow_external_work,
+    active
+  `)
+  .eq('active', true);
+
+if (profile?.role === 'MANAGER') {
+  profilesQuery = profilesQuery
+    .eq('role', 'EMPLOYEE')
+    .eq('department', profile.department);
+}
+
+const { data, error } = await profilesQuery
+  .order('full_name');
 
       if (error) {
         console.error('Erro ao buscar usuários:', error);
@@ -247,20 +255,19 @@ const sectors = [...new Set(users.map((user) => user.sector))]
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.headerIconButton}
-          onPress={handleLogout}
+          onPress={() => {
+  if (profile?.role === 'MANAGER') {
+    navigation.goBack();
+    return;
+  }
+
+  handleLogout();
+}}
         >
           <Text style={styles.backButtonText}>‹</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Usuários por setor</Text>
-        <View style={styles.headerRightGroup}>
-          <TouchableOpacity
-            style={styles.headerIconButton}
-            onPress={() => navigation.navigate('AdminReports')}
-          >
-            <Text style={styles.headerIcon}>📊</Text>
-          </TouchableOpacity>
-          
-        </View>
+        <View style={{ width: 28 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -295,91 +302,142 @@ const sectors = [...new Set(users.map((user) => user.sector))]
     <Text style={styles.chevronIcon}>›</Text>
   </TouchableOpacity>
 
+  <TouchableOpacity
+  style={styles.reportsMenuCard}
+  onPress={() =>
+    navigation.navigate('AdminReports')
+  }
+>
+  <View style={styles.reportsMenuLeft}>
+    <View style={styles.reportsMenuIcon}>
+      <Text style={styles.reportsMenuIconText}>
+        📊
+      </Text>
+    </View>
+
+    <View>
+      <Text style={styles.reportsMenuTitle}>
+        Relatórios
+      </Text>
+
+      <Text style={styles.reportsMenuSubtitle}>
+        Consulte métricas e gere relatórios
+      </Text>
+    </View>
+  </View>
+
+  <Text style={styles.chevronIcon}>›</Text>
+</TouchableOpacity>
+
         {/* Seletor de Setor */}
 <Text style={styles.filterLabel}>Setor</Text>
 
-<TouchableOpacity
-  style={styles.selectorCard}
-  onPress={() =>
-    setSectorSelectorOpen((currentValue) => !currentValue)
-  }
->
-  <Text style={styles.selectorText}>
-    {selectedSector === 'todos'
-      ? 'Todos os setores'
-      : selectedSector}
-  </Text>
+{profile?.role === 'MANAGER' ? (
+  <View style={styles.selectorCard}>
+    <Text style={styles.selectorText}>
+      {profile.department || 'Setor não informado'}
+    </Text>
 
-  <Text style={styles.dropdownArrow}>
-    {sectorSelectorOpen ? '▲' : '▼'}
-  </Text>
-</TouchableOpacity>
-
-{sectorSelectorOpen && (
-  <View
-    style={{
-      backgroundColor: '#FFFFFF',
-      borderWidth: 1,
-      borderColor: '#D9E2EF',
-      borderRadius: 12,
-      marginTop: 6,
-      marginBottom: 12,
-      overflow: 'hidden',
-    }}
-  >
+    <Text style={styles.dropdownArrow}>🔒</Text>
+  </View>
+) : (
+  <>
     <TouchableOpacity
-      style={{
-        paddingHorizontal: 16,
-        paddingVertical: 13,
-        backgroundColor:
-          selectedSector === 'todos' ? '#EFF6FF' : '#FFFFFF',
-      }}
-      onPress={() => {
-        setSelectedSector('todos');
-        setSectorSelectorOpen(false);
-      }}
+      style={styles.selectorCard}
+      onPress={() =>
+        setSectorSelectorOpen((currentValue) => !currentValue)
+      }
     >
-      <Text
-        style={{
-          color:
-            selectedSector === 'todos' ? '#1D4ED8' : '#334155',
-          fontWeight:
-            selectedSector === 'todos' ? '700' : '500',
-        }}
-      >
-        Todos os setores
+      <Text style={styles.selectorText}>
+        {selectedSector === 'todos'
+          ? 'Todos os setores'
+          : selectedSector}
+      </Text>
+
+      <Text style={styles.dropdownArrow}>
+        {sectorSelectorOpen ? '▲' : '▼'}
       </Text>
     </TouchableOpacity>
 
-    {sectors.map((sector) => (
-      <TouchableOpacity
-        key={sector}
+    {sectorSelectorOpen && (
+      <View
         style={{
-          paddingHorizontal: 16,
-          paddingVertical: 13,
-          borderTopWidth: 1,
-          borderTopColor: '#E2E8F0',
-          backgroundColor:
-            selectedSector === sector ? '#EFF6FF' : '#FFFFFF',
-        }}
-        onPress={() => {
-          setSelectedSector(sector);
-          setSectorSelectorOpen(false);
+          backgroundColor: '#FFFFFF',
+          borderWidth: 1,
+          borderColor: '#D9E2EF',
+          borderRadius: 12,
+          marginTop: 6,
+          marginBottom: 12,
+          overflow: 'hidden',
         }}
       >
-        <Text
+        <TouchableOpacity
           style={{
-            color:
-              selectedSector === sector ? '#1D4ED8' : '#334155',
-            fontWeight:
-              selectedSector === sector ? '700' : '500',
+            paddingHorizontal: 16,
+            paddingVertical: 13,
+            backgroundColor:
+              selectedSector === 'todos'
+                ? '#EFF6FF'
+                : '#FFFFFF',
+          }}
+          onPress={() => {
+            setSelectedSector('todos');
+            setSectorSelectorOpen(false);
           }}
         >
-          {sector}
-        </Text>
-      </TouchableOpacity>
-    ))}
-  </View>
+          <Text
+            style={{
+              color:
+                selectedSector === 'todos'
+                  ? '#1D4ED8'
+                  : '#334155',
+              fontWeight:
+                selectedSector === 'todos'
+                  ? '700'
+                  : '500',
+            }}
+          >
+            Todos os setores
+          </Text>
+        </TouchableOpacity>
+
+        {sectors.map((sector) => (
+          <TouchableOpacity
+            key={sector}
+            style={{
+              paddingHorizontal: 16,
+              paddingVertical: 13,
+              borderTopWidth: 1,
+              borderTopColor: '#E2E8F0',
+              backgroundColor:
+                selectedSector === sector
+                  ? '#EFF6FF'
+                  : '#FFFFFF',
+            }}
+            onPress={() => {
+              setSelectedSector(sector);
+              setSectorSelectorOpen(false);
+            }}
+          >
+            <Text
+              style={{
+                color:
+                  selectedSector === sector
+                    ? '#1D4ED8'
+                    : '#334155',
+                fontWeight:
+                  selectedSector === sector
+                    ? '700'
+                    : '500',
+              }}
+            >
+              {sector}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    )}
+  </>
 )}
 
         {/* Campo de Busca */}
@@ -681,4 +739,48 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginLeft: 4,
   },
+  reportsMenuCard: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  backgroundColor: '#FFFFFF',
+  borderWidth: 1,
+  borderColor: '#E2E8F0',
+  borderRadius: 12,
+  paddingHorizontal: 14,
+  paddingVertical: 13,
+  marginTop: 10,
+  marginBottom: 16,
+},
+
+reportsMenuLeft: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 12,
+},
+
+reportsMenuIcon: {
+  width: 38,
+  height: 38,
+  borderRadius: 10,
+  backgroundColor: '#EFF6FF',
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+
+reportsMenuIconText: {
+  fontSize: 19,
+},
+
+reportsMenuTitle: {
+  fontSize: 14,
+  fontWeight: '700',
+  color: '#0F172A',
+},
+
+reportsMenuSubtitle: {
+  fontSize: 11,
+  color: '#64748B',
+  marginTop: 2,
+},
 });
