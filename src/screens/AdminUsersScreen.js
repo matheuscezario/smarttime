@@ -271,63 +271,72 @@ const sectors = [...new Set(users.map((user) => user.sector))]
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Banner com Contador Dinâmico */}
-        
-  <TouchableOpacity
-    style={styles.approvalBanner}
-    onPress={() => navigation.navigate('AdminApprovals')}
-  >
-    <View style={styles.approvalBannerLeft}>
-      <Text style={styles.approvalBannerIcon}>⏳</Text>
+        {/* Acessos exibidos somente para o administrador */}
+{profile?.role === 'ADMIN' && (
+  <>
+    <TouchableOpacity
+      style={styles.approvalBanner}
+      onPress={() =>
+        navigation.navigate('AdminApprovals')
+      }
+    >
+      <View style={styles.approvalBannerLeft}>
+        <Text style={styles.approvalBannerIcon}>
+          ⏳
+        </Text>
 
-      <View>
-        <Text style={styles.approvalBannerTitle}>
-  {pendingCount > 0
-    ? `${pendingCount} ${
-        pendingCount === 1
-          ? 'solicitação pendente'
-          : 'solicitações pendentes'
-      }`
-    : 'Solicitações de ajuste'}
-</Text>
+        <View>
+          <Text style={styles.approvalBannerTitle}>
+            {pendingCount > 0
+              ? `${pendingCount} ${
+                  pendingCount === 1
+                    ? 'solicitação pendente'
+                    : 'solicitações pendentes'
+                }`
+              : 'Solicitações de ajuste'}
+          </Text>
 
-<Text style={styles.approvalBannerSubtitle}>
-  {pendingCount > 0
-    ? 'Clique para revisar e aprovar'
-    : 'Consulte o histórico de solicitações'}
-</Text>
+          <Text style={styles.approvalBannerSubtitle}>
+            {pendingCount > 0
+              ? 'Clique para revisar e aprovar'
+              : 'Consulte o histórico de solicitações'}
+          </Text>
+        </View>
       </View>
-    </View>
 
-    <Text style={styles.chevronIcon}>›</Text>
-  </TouchableOpacity>
+      <Text style={styles.chevronIcon}>›</Text>
+    </TouchableOpacity>
 
-  <TouchableOpacity
-  style={styles.reportsMenuCard}
-  onPress={() =>
-    navigation.navigate('AdminReports')
-  }
->
-  <View style={styles.reportsMenuLeft}>
-    <View style={styles.reportsMenuIcon}>
-      <Text style={styles.reportsMenuIconText}>
-        📊
-      </Text>
-    </View>
+    <TouchableOpacity
+      style={styles.reportsMenuCard}
+      onPress={() =>
+        navigation.navigate('AdminReports', {
+          profile,
+        })
+      }
+    >
+      <View style={styles.reportsMenuLeft}>
+        <View style={styles.reportsMenuIcon}>
+          <Text style={styles.reportsMenuIconText}>
+            📊
+          </Text>
+        </View>
 
-    <View>
-      <Text style={styles.reportsMenuTitle}>
-        Relatórios
-      </Text>
+        <View>
+          <Text style={styles.reportsMenuTitle}>
+            Relatórios
+          </Text>
 
-      <Text style={styles.reportsMenuSubtitle}>
-        Consulte métricas e gere relatórios
-      </Text>
-    </View>
-  </View>
+          <Text style={styles.reportsMenuSubtitle}>
+            Consulte métricas e gere relatórios
+          </Text>
+        </View>
+      </View>
 
-  <Text style={styles.chevronIcon}>›</Text>
-</TouchableOpacity>
+      <Text style={styles.chevronIcon}>›</Text>
+    </TouchableOpacity>
+  </>
+)}
 
         {/* Seletor de Setor */}
 <Text style={styles.filterLabel}>Setor</Text>

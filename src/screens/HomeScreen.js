@@ -14,8 +14,11 @@ import {
 import { useApp } from '../context/AppContext';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { StatusBar } from 'expo-status-bar';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function HomeScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
   const { todayPunches, recordPunch } = useApp();
   const profile = route.params?.profile;
   const isManager = profile?.role === 'MANAGER';
@@ -469,8 +472,23 @@ if (Platform.OS === 'web') {
 };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+    <View style={styles.container}>
+  <View
+    pointerEvents="none"
+    style={{
+      height: insets.top,
+      backgroundColor: '#1E40AF',
+    }}
+  />
+  <StatusBar style="light" />
+      <ScrollView
+  style={{ backgroundColor: '#F1F5F9' }}
+  contentContainerStyle={[
+    styles.scrollContent,
+    { paddingBottom: insets.bottom + 24 },
+  ]}
+  showsVerticalScrollIndicator={false}
+>
         {/* Cabeçalho Superior */}
         <View style={styles.topHeader}>
           <View style={styles.headerBar}>
@@ -704,7 +722,12 @@ if (Platform.OS === 'web') {
       }
     />
 
-    <View style={styles.managerMenuPanel}>
+    <View
+  style={[
+    styles.managerMenuPanel,
+    { paddingTop: insets.top + 16 },
+  ]}
+>
       <View style={styles.managerMenuHeader}>
         <View style={styles.managerMenuAvatar}>
           <Text style={styles.managerMenuAvatarText}>
@@ -791,9 +814,9 @@ if (Platform.OS === 'web') {
         onPress={() => {
           setManagerMenuVisible(false);
 
-          navigation.navigate(
-            'AdminReports'
-          );
+          navigation.navigate('AdminReports', {
+  profile,
+});
         }}
       >
         <Text style={styles.managerMenuItemIcon}>
@@ -925,7 +948,7 @@ if (Platform.OS === 'web') {
   </View>
 </Modal>
 
-</SafeAreaView>
+</View>
   );
 }
 

@@ -85,6 +85,13 @@ const handleAddPunchField = () => {
 };
 
 const handleTimeChange = (id, newTime) => {
+  const digits = newTime.replace(/\D/g, '').slice(0, 4);
+
+  const formattedTime =
+    digits.length > 2
+      ? `${digits.slice(0, 2)}:${digits.slice(2)}`
+      : digits;
+
   setPunches((previousPunches) =>
     previousPunches.map((item) => {
       if (item.id !== id) {
@@ -93,9 +100,9 @@ const handleTimeChange = (id, newTime) => {
 
       return {
         ...item,
-        time: newTime,
+        time: formattedTime,
         isModified:
-          newTime.trim() !==
+          formattedTime !==
           (item.originalTime || '').trim(),
       };
     })
@@ -360,9 +367,9 @@ const { error } = await supabase
   onChangeText={(value) =>
     handleTimeChange(item.id, value)
   }
-  placeholder="--:--"
+    placeholder="--:--"
   placeholderTextColor="#94A3B8"
-  keyboardType="numeric"
+  keyboardType="number-pad"
   maxLength={5}
   editable
 />

@@ -8,18 +8,93 @@ import {
   ScrollView,
   TextInput,
   Platform,
+  Modal,
 } from 'react-native';
 import * as Print from 'expo-print';
 import { supabase } from '../services/supabase';
+import * as Sharing from 'expo-sharing';
+import { Calendar, LocaleConfig } from 'react-native-calendars';
 
-export default function AdminReportsScreen({ navigation }) {
+LocaleConfig.locales['pt-br'] = {
+  monthNames: [
+    'Janeiro', 'Fevereiro', 'Março', 'Abril',
+    'Maio', 'Junho', 'Julho', 'Agosto',
+    'Setembro', 'Outubro', 'Novembro', 'Dezembro',
+  ],
+  monthNamesShort: [
+    'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+    'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez',
+  ],
+  dayNames: [
+    'Domingo', 'Segunda-feira', 'Terça-feira',
+    'Quarta-feira', 'Quinta-feira',
+    'Sexta-feira', 'Sábado',
+  ],
+  dayNamesShort: [
+    'Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb',
+  ],
+  today: 'Hoje',
+};
+
+LocaleConfig.defaultLocale = 'pt-br';
+
+export default function AdminReportsScreen({ navigation, route }) {
+  const profile = route.params?.profile;
+  const isManager = profile?.role === 'MANAGER';
 
   // Estados dos filtros da imagem
-  const [startDate, setStartDate] = useState('01/05/2024');
-  const [endDate, setEndDate] = useState('31/05/2024');
-  const [selectedSector, setSelectedSector] = useState('Todos os setores');
+  const [startDate, setStartDate] = useState(() => {
+  const today = new Date();
+
+  return new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    1
+  ).toLocaleDateString('pt-BR');
+});
+
+const [endDate, setEndDate] = useState(() => {
+  const today = new Date();
+
+  return new Date(
+    today.getFullYear(),
+    today.getMonth() + 1,
+    0
+  ).toLocaleDateString('pt-BR');
+});
+  const [sectorFilter, setSelectedSector] =
+  useState('Todos os setores');
+
+const selectedSector = isManager
+  ? profile?.department || 'Setor não informado'
+  : sectorFilter;
   const [sectors, setSectors] = useState([]);
 const [sectorMenuOpen, setSectorMenuOpen] = useState(false);
+
+const [calendarField, setCalendarField] = useState(null);
+
+const calendarDateText =
+  calendarField === 'end' ? endDate : startDate;
+
+const calendarDateISO = calendarDateText
+  .split('/')
+  .reverse()
+  .join('-');
+
+const handleSelectCalendarDate = (day) => {
+  const formattedDate = day.dateString
+    .split('-')
+    .reverse()
+    .join('/');
+
+  if (calendarField === 'start') {
+    setStartDate(formattedDate);
+  } else if (calendarField === 'end') {
+    setEndDate(formattedDate);
+  }
+
+  setCalendarField(null);
+};
 
 const [reportMetrics, setReportMetrics] = useState({
   employees: 0,
@@ -57,10 +132,11 @@ const convertDateToISO = (dateText, endOfDay = false) => {
 useEffect(() => {
   const loadSectors = async () => {
     const { data, error } = await supabase
-      .from('profiles')
-      .select('department')
-      .eq('active', true)
-      .not('department', 'is', null);
+  .from('profiles')
+  .select('department')
+  .eq('active', true)
+  .neq('role', 'ADMIN')
+  .not('department', 'is', null);
 
     if (error) {
       console.error(
@@ -456,14 +532,24 @@ const timeEntriesRows =
   return;
 }
 
-const { uri } =
-  await Print.printToFileAsync({
-    html: htmlContent,
-  });
+const { uri } = await Print.printToFileAsync({
+  html: htmlContent,
+});
 
-alert(
-  `Relatório em PDF gerado com sucesso!\nSalvo em: ${uri}`
-);
+const canShare = await Sharing.isAvailableAsync();
+
+if (!canShare) {
+  alert(
+    'O compartilhamento não está disponível neste dispositivo.'
+  );
+  return;
+}
+
+await Sharing.shareAsync(uri, {
+  mimeType: 'application/pdf',
+  UTI: 'com.adobe.pdf',
+  dialogTitle: 'Salvar ou compartilhar relatório',
+});
     } catch (error) {
       alert('Erro ao gerar relatório.');
       console.error(error);
@@ -488,79 +574,94 @@ alert(
         {/* Card de Configuração de Relatório */}
         <View style={styles.filterCard}>
           {/* Seção Período */}
-          <Text style={styles.cardSectionTitle}>Período</Text>
-          <View style={styles.dateRow}>
-            {/* Campo Início */}
-            <View style={styles.dateCol}>
-              <Text style={styles.inputSubLabel}>Início</Text>
-              <View style={styles.dateInputWrapper}>
-                <TextInput
-                  style={styles.dateInput}
-                  value={startDate}
-                  onChangeText={setStartDate}
-                  placeholder="DD/MM/AAAA"
-                  placeholderTextColor="#94A3B8"
-                />
-                <Text style={styles.calendarIcon}>📅</Text>
-              </View>
-            </View>
+<Text style={styles.cardSectionTitle}>Período</Text>
 
-            {/* Campo Fim */}
-            <View style={styles.dateCol}>
-              <Text style={styles.inputSubLabel}>Fim</Text>
-              <View style={styles.dateInputWrapper}>
-                <TextInput
-                  style={styles.dateInput}
-                  value={endDate}
-                  onChangeText={setEndDate}
-                  placeholder="DD/MM/AAAA"
-                  placeholderTextColor="#94A3B8"
-                />
-                <Text style={styles.calendarIcon}>📅</Text>
-              </View>
-            </View>
-          </View>
+<View style={styles.dateRow}>
+  <View style={styles.dateCol}>
+    <Text style={styles.inputSubLabel}>Início</Text>
+
+    <TouchableOpacity
+      style={styles.dateInputWrapper}
+      onPress={() => setCalendarField('start')}
+      accessibilityRole="button"
+      accessibilityLabel="Selecionar data inicial"
+    >
+      <Text style={styles.dateInput}>
+        {startDate}
+      </Text>
+
+      <Text style={styles.calendarIcon}>📅</Text>
+    </TouchableOpacity>
+  </View>
+
+  <View style={styles.dateCol}>
+    <Text style={styles.inputSubLabel}>Fim</Text>
+
+    <TouchableOpacity
+      style={styles.dateInputWrapper}
+      onPress={() => setCalendarField('end')}
+      accessibilityRole="button"
+      accessibilityLabel="Selecionar data final"
+    >
+      <Text style={styles.dateInput}>
+        {endDate}
+      </Text>
+
+      <Text style={styles.calendarIcon}>📅</Text>
+    </TouchableOpacity>
+  </View>
+</View>
 
           {/* Seção Setor */}
-          <Text style={styles.fieldLabel}>Setor</Text>
-          <TouchableOpacity
-  style={styles.dropdownSelector}
-  onPress={() =>
-    setSectorMenuOpen((current) => !current)
-  }
->
-  <Text style={styles.dropdownText}>
-    {selectedSector}
-  </Text>
+<Text style={styles.fieldLabel}>Setor</Text>
 
-  <Text style={styles.dropdownChevron}>
-  {sectorMenuOpen ? '▲' : '▼'}
-</Text>
-</TouchableOpacity>
+{isManager ? (
+  <View style={styles.dropdownSelector}>
+    <Text style={styles.dropdownText}>
+      {selectedSector}
+    </Text>
 
-{sectorMenuOpen && (
-  <View style={styles.sectorOptions}>
-    {['Todos os setores', ...sectors].map(
-      (sector) => (
-        <TouchableOpacity
-          key={sector}
-          style={styles.sectorOption}
-          onPress={() => {
-            setSelectedSector(sector);
-            setSectorMenuOpen(false);
-          }}
-        >
-          <Text style={styles.sectorOptionText}>
-            {sector}
-          </Text>
-        </TouchableOpacity>
-      )
-    )}
+    <Text style={styles.dropdownChevron}>🔒</Text>
   </View>
+) : (
+  <>
+    <TouchableOpacity
+      style={styles.dropdownSelector}
+      onPress={() =>
+        setSectorMenuOpen((current) => !current)
+      }
+    >
+      <Text style={styles.dropdownText}>
+        {selectedSector}
+      </Text>
+
+      <Text style={styles.dropdownChevron}>
+        {sectorMenuOpen ? '▲' : '▼'}
+      </Text>
+    </TouchableOpacity>
+
+    {sectorMenuOpen && (
+      <View style={styles.sectorOptions}>
+        {['Todos os setores', ...sectors].map(
+          (sector) => (
+            <TouchableOpacity
+              key={sector}
+              style={styles.sectorOption}
+              onPress={() => {
+                setSelectedSector(sector);
+                setSectorMenuOpen(false);
+              }}
+            >
+              <Text style={styles.sectorOptionText}>
+                {sector}
+              </Text>
+            </TouchableOpacity>
+          )
+        )}
+      </View>
+    )}
+  </>
 )}
-
-        
-
           {/* Botão Gerar Relatório */}
           <TouchableOpacity style={styles.btnGenerate} onPress={handleGenerateReport}>
             <Text style={styles.btnGenerateText}>Gerar relatório</Text>
@@ -607,6 +708,51 @@ alert(
   </View>
 </View>
       </ScrollView>
+      <Modal
+  visible={calendarField !== null}
+  transparent
+  animationType="fade"
+  onRequestClose={() => setCalendarField(null)}
+>
+  <View style={styles.calendarOverlay}>
+    <View style={styles.calendarModal}>
+      <View style={styles.calendarHeader}>
+        <Text style={styles.calendarTitle}>
+          {calendarField === 'start'
+            ? 'Selecionar início'
+            : 'Selecionar fim'}
+        </Text>
+
+        <TouchableOpacity
+          onPress={() => setCalendarField(null)}
+          accessibilityLabel="Fechar calendário"
+        >
+          <Text style={styles.calendarClose}>✕</Text>
+        </TouchableOpacity>
+      </View>
+
+      {calendarField !== null && (
+        <Calendar
+          key={`${calendarField}-${calendarDateISO}`}
+          current={calendarDateISO}
+          firstDay={1}
+          onDayPress={handleSelectCalendarDate}
+          markedDates={{
+            [calendarDateISO]: {
+              selected: true,
+              selectedColor: '#1D4ED8',
+            },
+          }}
+          theme={{
+            todayTextColor: '#1D4ED8',
+            arrowColor: '#1D4ED8',
+            textMonthFontWeight: '700',
+          }}
+        />
+      )}
+    </View>
+  </View>
+</Modal>
     </SafeAreaView>
   );
 }
@@ -911,5 +1057,39 @@ sectorOption: {
 sectorOptionText: {
   fontSize: 14,
   color: '#334155',
+},
+calendarOverlay: {
+  flex: 1,
+  justifyContent: 'center',
+  alignItems: 'center',
+  backgroundColor: 'rgba(15, 23, 42, 0.5)',
+  padding: 20,
+},
+
+calendarModal: {
+  width: '100%',
+  maxWidth: 400,
+  backgroundColor: '#FFFFFF',
+  borderRadius: 16,
+  padding: 16,
+},
+
+calendarHeader: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  marginBottom: 12,
+},
+
+calendarTitle: {
+  fontSize: 16,
+  fontWeight: '700',
+  color: '#0F172A',
+},
+
+calendarClose: {
+  fontSize: 20,
+  color: '#64748B',
+  padding: 6,
 },
 });

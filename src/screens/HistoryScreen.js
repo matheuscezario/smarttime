@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from 'react';
 import {
@@ -19,6 +20,7 @@ import {
 import * as Print from 'expo-print';
 import { useApp } from '../context/AppContext';
 import { supabase } from '../services/supabase';
+import * as Sharing from 'expo-sharing';
 
 export default function HistoryScreen({
   navigation,
@@ -78,6 +80,32 @@ const [isLoadingHistory, setIsLoadingHistory] =
     );
   });
   const [previewVisible, setPreviewVisible] = useState(false);
+
+  const pendingPdfUri = useRef(null);
+
+const sharePendingPdf = async () => {
+  const uri = pendingPdfUri.current;
+
+  if (!uri) {
+    return;
+  }
+
+  pendingPdfUri.current = null;
+
+  try {
+    await Sharing.shareAsync(uri, {
+      mimeType: 'application/pdf',
+      UTI: 'com.adobe.pdf',
+      dialogTitle: 'Salvar ou compartilhar espelho de ponto',
+    });
+  } catch (error) {
+    console.error('Erro ao compartilhar espelho:', error);
+
+    alert(
+      `Não foi possível compartilhar o PDF.\n\n${error.message}`
+    );
+  }
+};
 
   useFocusEffect(
   useCallback(() => {
@@ -538,16 +566,25 @@ const rowsHtml = [
   return;
 }
 
-const { uri } =
-  await Print.printToFileAsync({
-    html: htmlContent,
-  });
+const { uri } = await Print.printToFileAsync({
+  html: htmlContent,
+});
 
-alert(
-  `PDF gerado com sucesso!\nArquivo salvo em: ${uri}`
-);
+const canShare = await Sharing.isAvailableAsync();
 
+if (!canShare) {
+  alert(
+    'O compartilhamento não está disponível neste dispositivo.'
+  );
+  return;
+}
+
+pendingPdfUri.current = uri;
 setPreviewVisible(false);
+
+if (Platform.OS !== 'ios') {
+  await sharePendingPdf();
+}
     } catch (error) {
       alert('Erro ao gerar o PDF. Verifique o console para mais detalhes.');
       console.error(error);
@@ -935,7 +972,13 @@ const isViewingCurrentMonth =
       </ScrollView>
 
       {/* Modal de Pré-visualização */}
-      <Modal visible={previewVisible} animationType="slide" transparent={true}>
+      <Modal
+  visible={previewVisible}
+  animationType="slide"
+  transparent
+  onDismiss={sharePendingPdf}
+  onRequestClose={() => setPreviewVisible(false)}
+>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
