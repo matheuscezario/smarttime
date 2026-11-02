@@ -12,6 +12,8 @@ import AdminUsersScreen from '../screens/AdminUsersScreen';
 import AdminUserDetailScreen from '../screens/AdminUserDetailScreen';
 import AdminApprovalsScreen from '../screens/AdminApprovalsScreen';
 import AdminReportsScreen from '../screens/AdminReportsScreen';
+import AdminUserFormScreen from '../screens/AdminUserFormScreen';
+import AdminManageUsersScreen from '../screens/AdminManageUsersScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -39,6 +41,8 @@ export default function AppNavigator() {
         <Stack.Screen name="AdminUserDetail" component={AdminUserDetailScreen} />
         <Stack.Screen name="AdminApprovals" component={AdminApprovalsScreen} />
         <Stack.Screen name="AdminReports" component={AdminReportsScreen} />
+        <Stack.Screen name="AdminUserForm" component={AdminUserFormScreen} />
+        <Stack.Screen name="AdminManageUsers" component={AdminManageUsersScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

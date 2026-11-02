@@ -339,6 +339,30 @@ const sectors = [...new Set(users.map((user) => user.sector))]
 )}
 
         {/* Seletor de Setor */}
+{profile?.role === 'ADMIN' && (
+  <TouchableOpacity
+    style={{
+      backgroundColor: '#1D4ED8',
+      borderRadius: 10,
+      paddingVertical: 14,
+      paddingHorizontal: 16,
+      alignItems: 'center',
+      marginBottom: 18,
+    }}
+    onPress={() => navigation.navigate('AdminManageUsers')}
+  >
+    <Text
+      style={{
+        color: '#FFFFFF',
+        fontSize: 15,
+        fontWeight: '700',
+      }}
+    >
+      Gerenciar usuários
+    </Text>
+  </TouchableOpacity>
+)}
+
 <Text style={styles.filterLabel}>Setor</Text>
 
 {profile?.role === 'MANAGER' ? (

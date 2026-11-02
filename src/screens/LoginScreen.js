@@ -89,6 +89,33 @@ export default function LoginScreen({ navigation }) {
         return;
       }
 
+      const {
+        data: accessAllowed,
+        error: accessError,
+      } = await supabase.rpc('smarttime_current_user_is_active');
+
+      if (accessError || typeof accessAllowed !== 'boolean') {
+        console.error('Erro ao verificar acesso:', accessError);
+
+        await supabase.auth.signOut();
+
+        showAlert(
+          'Não foi possível verificar o acesso',
+          'Tente novamente em alguns instantes.'
+        );
+        return;
+      }
+
+      if (!accessAllowed) {
+        await supabase.auth.signOut();
+
+        showAlert(
+          'Acesso não liberado',
+          'Seu usuário está desativado ou ainda não possui um perfil liberado. Entre em contato com o administrador.'
+        );
+        return;
+      }
+
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select(
