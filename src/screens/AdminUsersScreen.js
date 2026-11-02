@@ -9,7 +9,9 @@ import {
   TextInput,
   Alert,
   Platform,
+  Modal,
 } from 'react-native';
+import { SafeAreaView as MenuSafeAreaView } from 'react-native-safe-area-context';
 import { useApp } from '../context/AppContext';
 import { supabase } from '../services/supabase';
 
@@ -26,6 +28,24 @@ const mockUsers = [
 export default function AdminUsersScreen({ navigation, route }) {
   const { requests } = useApp();
   const profile = route.params?.profile;
+  const isAdmin = profile?.role === 'ADMIN';
+  const [adminMenuVisible, setAdminMenuVisible] = useState(false);
+
+  const adminName = profile?.full_name || 'Administrador';
+  const adminInitials = adminName
+    .trim()
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
+  const openAdminScreen = (screen) => {
+    if (!isAdmin) return;
+
+    setAdminMenuVisible(false);
+    navigation.navigate(screen, { profile });
+  };
   const canManageUsers =
   profile?.role === 'ADMIN' ||
   profile?.role === 'MANAGER';
@@ -254,115 +274,37 @@ const sectors = [...new Set(users.map((user) => user.sector))]
       {/* Cabeçalho */}
       <View style={styles.header}>
         <TouchableOpacity
-          style={styles.headerIconButton}
+          style={styles.adminHeaderButton}
+          accessibilityRole="button"
+          accessibilityLabel={isAdmin ? 'Abrir menu administrativo' : 'Voltar'}
           onPress={() => {
-  if (profile?.role === 'MANAGER') {
-    navigation.goBack();
-    return;
-  }
+            if (isAdmin) {
+              setAdminMenuVisible(true);
+              return;
+            }
 
-  handleLogout();
-}}
+            navigation.goBack();
+          }}
         >
-          <Text style={styles.backButtonText}>‹</Text>
+          <Text
+            style={isAdmin ? styles.adminMenuIcon : styles.backButtonText}
+          >
+            {isAdmin ? '☰' : '‹'}
+          </Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Usuários por setor</Text>
-        <View style={{ width: 28 }} />
+
+        <Text
+          style={[styles.headerTitle, styles.adminHeaderTitle]}
+          numberOfLines={1}
+        >
+          Usuários por setor
+        </Text>
+
+        <View style={styles.adminHeaderButton} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Acessos exibidos somente para o administrador */}
-{profile?.role === 'ADMIN' && (
-  <>
-    <TouchableOpacity
-      style={styles.approvalBanner}
-      onPress={() =>
-        navigation.navigate('AdminApprovals')
-      }
-    >
-      <View style={styles.approvalBannerLeft}>
-        <Text style={styles.approvalBannerIcon}>
-          ⏳
-        </Text>
-
-        <View>
-          <Text style={styles.approvalBannerTitle}>
-            {pendingCount > 0
-              ? `${pendingCount} ${
-                  pendingCount === 1
-                    ? 'solicitação pendente'
-                    : 'solicitações pendentes'
-                }`
-              : 'Solicitações de ajuste'}
-          </Text>
-
-          <Text style={styles.approvalBannerSubtitle}>
-            {pendingCount > 0
-              ? 'Clique para revisar e aprovar'
-              : 'Consulte o histórico de solicitações'}
-          </Text>
-        </View>
-      </View>
-
-      <Text style={styles.chevronIcon}>›</Text>
-    </TouchableOpacity>
-
-    <TouchableOpacity
-      style={styles.reportsMenuCard}
-      onPress={() =>
-        navigation.navigate('AdminReports', {
-          profile,
-        })
-      }
-    >
-      <View style={styles.reportsMenuLeft}>
-        <View style={styles.reportsMenuIcon}>
-          <Text style={styles.reportsMenuIconText}>
-            📊
-          </Text>
-        </View>
-
-        <View>
-          <Text style={styles.reportsMenuTitle}>
-            Relatórios
-          </Text>
-
-          <Text style={styles.reportsMenuSubtitle}>
-            Consulte métricas e gere relatórios
-          </Text>
-        </View>
-      </View>
-
-      <Text style={styles.chevronIcon}>›</Text>
-    </TouchableOpacity>
-  </>
-)}
-
-        {/* Seletor de Setor */}
-{profile?.role === 'ADMIN' && (
-  <TouchableOpacity
-    style={{
-      backgroundColor: '#1D4ED8',
-      borderRadius: 10,
-      paddingVertical: 14,
-      paddingHorizontal: 16,
-      alignItems: 'center',
-      marginBottom: 18,
-    }}
-    onPress={() => navigation.navigate('AdminManageUsers')}
-  >
-    <Text
-      style={{
-        color: '#FFFFFF',
-        fontSize: 15,
-        fontWeight: '700',
-      }}
-    >
-      Gerenciar usuários
-    </Text>
-  </TouchableOpacity>
-)}
-
+        {/* Filtros da lista de usuários */}
 <Text style={styles.filterLabel}>Setor</Text>
 
 {profile?.role === 'MANAGER' ? (
@@ -546,11 +488,263 @@ const sectors = [...new Set(users.map((user) => user.sector))]
           ))}
         </View>
       </ScrollView>
+      <Modal
+        visible={isAdmin && adminMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAdminMenuVisible(false)}
+      >
+        <View style={styles.adminMenuOverlay}>
+          <TouchableOpacity
+            style={styles.adminMenuBackdrop}
+            activeOpacity={1}
+            accessibilityLabel="Fechar menu administrativo"
+            onPress={() => setAdminMenuVisible(false)}
+          />
+
+          <MenuSafeAreaView
+            style={styles.adminMenuPanel}
+            edges={['top', 'bottom', 'left']}
+          >
+            <ScrollView
+              contentContainerStyle={styles.adminMenuContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.adminMenuProfile}>
+                <View style={styles.adminMenuAvatar}>
+                  <Text style={styles.adminMenuAvatarText}>
+                    {adminInitials}
+                  </Text>
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.adminMenuName}>
+                    {adminName}
+                  </Text>
+                  <Text style={styles.adminMenuRole}>
+                    Administrador
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.adminMenuCloseButton}
+                  accessibilityLabel="Fechar menu"
+                  onPress={() => setAdminMenuVisible(false)}
+                >
+                  <Text style={styles.adminMenuCloseText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.adminMenuSection}>ADMINISTRAÇÃO</Text>
+
+              <TouchableOpacity
+                style={[
+                  styles.adminMenuItem,
+                  styles.adminMenuItemSelected,
+                ]}
+                onPress={() => setAdminMenuVisible(false)}
+              >
+                <Text style={styles.adminMenuItemIcon}>👥</Text>
+                <Text style={styles.adminMenuSelectedText}>
+                  Usuários por setor
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.adminMenuItem}
+                onPress={() => openAdminScreen('AdminApprovals')}
+              >
+                <Text style={styles.adminMenuItemIcon}>✅</Text>
+
+                <Text style={styles.adminMenuItemText}>
+                  Solicitações de ajuste
+                </Text>
+
+                {pendingCount > 0 && (
+                  <View style={styles.adminMenuBadge}>
+                    <Text style={styles.adminMenuBadgeText}>
+                      {pendingCount > 99 ? '99+' : pendingCount}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.adminMenuItem}
+                onPress={() => openAdminScreen('AdminReports')}
+              >
+                <Text style={styles.adminMenuItemIcon}>📊</Text>
+                <Text style={styles.adminMenuItemText}>
+                  Relatórios
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.adminMenuItem}
+                onPress={() => openAdminScreen('AdminManageUsers')}
+              >
+                <Text style={styles.adminMenuItemIcon}>⚙️</Text>
+                <Text style={styles.adminMenuItemText}>
+                  Gerenciar usuários
+                </Text>
+              </TouchableOpacity>
+
+              <View style={styles.adminMenuDivider} />
+
+              <TouchableOpacity
+                style={styles.adminMenuItem}
+                onPress={() => {
+                  setAdminMenuVisible(false);
+                  handleLogout();
+                }}
+              >
+                <Text style={styles.adminMenuItemIcon}>🚪</Text>
+                <Text style={styles.adminMenuLogoutText}>Sair</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </MenuSafeAreaView>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  adminHeaderButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  adminHeaderTitle: {
+    flex: 1,
+    textAlign: 'center',
+    marginHorizontal: 8,
+  },
+  adminMenuIcon: {
+    fontSize: 25,
+    color: '#1D4ED8',
+    fontWeight: '700',
+  },
+  adminMenuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+  },
+  adminMenuBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  adminMenuPanel: {
+    width: '88%',
+    maxWidth: 360,
+    height: '100%',
+    backgroundColor: '#FFFFFF',
+  },
+  adminMenuContent: {
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 24,
+  },
+  adminMenuProfile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingBottom: 22,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    marginBottom: 20,
+  },
+  adminMenuAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#1D4ED8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  adminMenuAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  adminMenuName: {
+    color: '#0F172A',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  adminMenuRole: {
+    color: '#64748B',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  adminMenuCloseButton: {
+    width: 36,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  adminMenuCloseText: {
+    color: '#64748B',
+    fontSize: 20,
+  },
+  adminMenuSection: {
+    color: '#94A3B8',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginBottom: 12,
+    marginLeft: 10,
+  },
+  adminMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 54,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginBottom: 6,
+    gap: 8,
+  },
+  adminMenuItemSelected: {
+    backgroundColor: '#EFF6FF',
+  },
+  adminMenuItemIcon: {
+    width: 28,
+    textAlign: 'center',
+    fontSize: 19,
+  },
+  adminMenuItemText: {
+    flex: 1,
+    color: '#334155',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  adminMenuSelectedText: {
+    flex: 1,
+    color: '#1D4ED8',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  adminMenuBadge: {
+    backgroundColor: '#DBEAFE',
+    borderRadius: 12,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  adminMenuBadgeText: {
+    color: '#1D4ED8',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  adminMenuDivider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+    marginVertical: 14,
+  },
+  adminMenuLogoutText: {
+    color: '#DC2626',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
