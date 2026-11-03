@@ -1060,7 +1060,7 @@ const isViewingCurrentMonth =
                         {p}
                       </Text>
                     ))}
-                    <Text style={[styles.tableCol, styles.colTotal]}>{item.totalHours.split(' ')[0]}</Text>
+                    <Text style={[styles.tableCol, styles.colTotal]}>{item.totalHours}</Text>
                   </View>
                 ))}
               </View>

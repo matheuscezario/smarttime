@@ -143,6 +143,52 @@ const handleTimeChange = (id, newTime) => {
     return;
   }
 
+  // Validar marcacoes antes do envio
+  if (requestType === 'add') {
+    let previousPunch = null;
+
+    for (const punch of punches) {
+      const time = (punch.time || '').trim();
+
+      if (!time) {
+        if (punch.isOriginal) {
+          alert(
+            `A marcação "${punch.label}" já está registrada. Informe o horário corrigido em vez de deixar o campo vazio.`
+          );
+          return;
+        }
+
+        continue;
+      }
+
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+        alert(
+          `Horário inválido em "${punch.label}". Use o formato HH:MM, entre 00:00 e 23:59.`
+        );
+        return;
+      }
+
+      const [hours, minutes] = time.split(':').map(Number);
+      const totalMinutes = hours * 60 + minutes;
+
+      if (
+        previousPunch &&
+        totalMinutes <= previousPunch.totalMinutes
+      ) {
+        alert(
+          `Confira a ordem das marcações:\n\n"${punch.label}" (${time}) precisa ser posterior a "${previousPunch.label}" (${previousPunch.time}).\n\nPara esta jornada, os horários devem ocorrer no mesmo dia.`
+        );
+        return;
+      }
+
+      previousPunch = {
+        label: punch.label,
+        time,
+        totalMinutes,
+      };
+    }
+  }
+
   const entryTypes = [
   'CLOCK_IN',
   'LUNCH_OUT',
